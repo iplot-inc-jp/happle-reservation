@@ -16,6 +16,7 @@ interface FormData {
 
 interface FormErrors {
   name?: string
+  nameKana?: string
   email?: string
   phone?: string
 }
@@ -84,6 +85,10 @@ function FreeBookingContent() {
     
     if (!formData.name.trim()) {
       errors.name = 'お名前を入力してください'
+    }
+    
+    if (!formData.nameKana.trim()) {
+      errors.nameKana = 'フリガナを入力してください'
     }
     
     if (!formData.email.trim()) {
@@ -323,7 +328,7 @@ function FreeBookingContent() {
             {/* Name Kana */}
             <div>
               <label htmlFor="nameKana" className="label">
-                お名前（フリガナ）
+                お名前（フリガナ） <span className="text-red-500">*</span>
               </label>
               <input
                 type="text"
@@ -331,9 +336,12 @@ function FreeBookingContent() {
                 name="nameKana"
                 value={formData.nameKana}
                 onChange={handleInputChange}
-                className="input-field"
+                className={`input-field ${formErrors.nameKana ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : ''}`}
                 placeholder="ヤマダ タロウ"
               />
+              {formErrors.nameKana && (
+                <p className="text-sm text-red-500 mt-1">{formErrors.nameKana}</p>
+              )}
             </div>
 
             {/* Email */}

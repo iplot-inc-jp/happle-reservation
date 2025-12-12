@@ -387,53 +387,69 @@ def _parse_hacomono_error(error: HacomonoAPIError) -> dict:
 def _create_guest_member(client, guest_name: str, guest_email: str, guest_phone: str, 
                          guest_name_kana: str = "", guest_note: str = "",
                          gender: int = 1, birthday: str = "2000-01-01", studio_id: int = 2):
-    """ゲストメンバーを作成し、チケットを付与"""
+    """ゲストメンバーを作成（または既存メンバーを使用）し、チケットを付与"""
     import secrets
     import string
     
-    # 名前を姓名に分割
-    name_parts = guest_name.split()
-    if len(name_parts) >= 2:
-        last_name = name_parts[0]
-        first_name = " ".join(name_parts[1:])
-    else:
-        last_name = guest_name
-        first_name = guest_name  # 名前が1つの場合は両方に設定
+    member_id = None
     
-    # フリガナも分割
-    kana_parts = guest_name_kana.split() if guest_name_kana else []
-    if len(kana_parts) >= 2:
-        last_name_kana = kana_parts[0]
-        first_name_kana = " ".join(kana_parts[1:])
-    else:
-        last_name_kana = guest_name_kana or None
-        first_name_kana = guest_name_kana or None
+    # まず、メールアドレスで既存メンバーを検索
+    try:
+        search_response = client.get_members({"keyword": guest_email})
+        members = search_response.get("data", {}).get("members", {}).get("list", [])
+        for member in members:
+            if member.get("mail_address") == guest_email:
+                member_id = member.get("id")
+                logger.info(f"Found existing member: ID={member_id}, email={guest_email}")
+                break
+    except Exception as e:
+        logger.warning(f"Failed to search for existing member: {e}")
     
-    # ランダムパスワードを生成
-    random_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12)) + "!A1"
-    
-    member_data = {
-        "last_name": last_name,
-        "first_name": first_name,
-        "last_name_kana": last_name_kana,
-        "first_name_kana": first_name_kana,
-        "mail_address": guest_email,
-        "tel": guest_phone,
-        "plain_password": random_password,
-        "gender": gender,
-        "birthday": birthday,
-        "studio_id": studio_id,
-        "note": f"Web予約ゲスト: {guest_note}"
-    }
-    
-    # 1. メンバーを作成
-    member_response = client.create_member(member_data)
-    member_id = member_response.get("data", {}).get("member", {}).get("id")
-    
+    # 既存メンバーが見つからない場合は新規作成
     if not member_id:
-        raise ValueError("メンバーの作成に失敗しました")
-    
-    logger.info(f"Created member ID: {member_id}")
+        # 名前を姓名に分割
+        name_parts = guest_name.split()
+        if len(name_parts) >= 2:
+            last_name = name_parts[0]
+            first_name = " ".join(name_parts[1:])
+        else:
+            last_name = guest_name
+            first_name = guest_name  # 名前が1つの場合は両方に設定
+        
+        # フリガナも分割
+        kana_parts = guest_name_kana.split() if guest_name_kana else []
+        if len(kana_parts) >= 2:
+            last_name_kana = kana_parts[0]
+            first_name_kana = " ".join(kana_parts[1:])
+        else:
+            last_name_kana = guest_name_kana or None
+            first_name_kana = guest_name_kana or None
+        
+        # ランダムパスワードを生成
+        random_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12)) + "!A1"
+        
+        member_data = {
+            "last_name": last_name,
+            "first_name": first_name,
+            "last_name_kana": last_name_kana,
+            "first_name_kana": first_name_kana,
+            "mail_address": guest_email,
+            "tel": guest_phone,
+            "plain_password": random_password,
+            "gender": gender,
+            "birthday": birthday,
+            "studio_id": studio_id,
+            "note": f"Web予約ゲスト: {guest_note}"
+        }
+        
+        # メンバーを作成
+        member_response = client.create_member(member_data)
+        member_id = member_response.get("data", {}).get("member", {}).get("id")
+        
+        if not member_id:
+            raise ValueError("メンバーの作成に失敗しました")
+        
+        logger.info(f"Created new member ID: {member_id}")
     
     # 2. チケットを付与（Web予約用チケット ID:5）
     try:

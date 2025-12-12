@@ -202,10 +202,8 @@ def get_schedule():
     if not end_date:
         end_date = (datetime.now() + timedelta(days=14)).strftime("%Y-%m-%d")
     
-    # hacomono APIはシンプルなクエリのみ対応
-    query = {"page": 1}
-    
-    response = client.get_studio_lessons(query)
+    # hacomono APIはクエリなしで呼び出す（クエリパラメータがエラーを引き起こす）
+    response = client.get_studio_lessons(None)
     
     lessons = response.get("data", {}).get("studio_lessons", {}).get("list", [])
     

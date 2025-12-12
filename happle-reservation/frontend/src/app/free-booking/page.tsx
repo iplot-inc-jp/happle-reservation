@@ -1,0 +1,408 @@
+'use client'
+
+import { useEffect, useState, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { createChoiceReservation, getPrograms, Program } from '@/lib/api'
+import { format, parse } from 'date-fns'
+import { ja } from 'date-fns/locale'
+
+interface FormData {
+  name: string
+  nameKana: string
+  email: string
+  phone: string
+  note: string
+}
+
+interface FormErrors {
+  name?: string
+  email?: string
+  phone?: string
+}
+
+function FreeBookingContent() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const studioRoomId = searchParams.get('studio_room_id')
+  const startAt = searchParams.get('start_at')
+  const dateStr = searchParams.get('date')
+  const timeStr = searchParams.get('time')
+  const studioId = searchParams.get('studio_id')
+
+  const [programs, setPrograms] = useState<Program[]>([])
+  const [selectedProgram, setSelectedProgram] = useState<Program | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  
+  const [formData, setFormData] = useState<FormData>({
+    name: '',
+    nameKana: '',
+    email: '',
+    phone: '',
+    note: ''
+  })
+  const [formErrors, setFormErrors] = useState<FormErrors>({})
+
+  useEffect(() => {
+    async function loadData() {
+      if (!studioRoomId || !startAt) {
+        setError('予約情報が不足しています')
+        setLoading(false)
+        return
+      }
+
+      try {
+        setLoading(true)
+        // プログラム一覧を取得
+        const programsData = await getPrograms(studioId ? parseInt(studioId) : undefined)
+        setPrograms(programsData)
+        // 最初のプログラムをデフォルト選択
+        if (programsData.length > 0) {
+          setSelectedProgram(programsData[0])
+        }
+      } catch (err) {
+        setError('データの読み込みに失敗しました')
+        console.error(err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadData()
+  }, [studioRoomId, startAt, studioId])
+
+  const validateForm = (): boolean => {
+    const errors: FormErrors = {}
+    
+    if (!formData.name.trim()) {
+      errors.name = 'お名前を入力してください'
+    }
+    
+    if (!formData.email.trim()) {
+      errors.email = 'メールアドレスを入力してください'
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+      errors.email = '正しいメールアドレスを入力してください'
+    }
+    
+    if (!formData.phone.trim()) {
+      errors.phone = '電話番号を入力してください'
+    } else if (!/^[\d-]{10,}$/.test(formData.phone.replace(/\s/g, ''))) {
+      errors.phone = '正しい電話番号を入力してください'
+    }
+    
+    setFormErrors(errors)
+    return Object.keys(errors).length === 0
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    
+    if (!validateForm() || !selectedProgram || !studioRoomId || !startAt) return
+    
+    setSubmitting(true)
+    setError(null)
+    
+    try {
+      const result = await createChoiceReservation({
+        studio_room_id: parseInt(studioRoomId),
+        program_id: selectedProgram.id,
+        start_at: startAt,
+        guest_name: formData.name,
+        guest_name_kana: formData.nameKana,
+        guest_email: formData.email,
+        guest_phone: formData.phone,
+        guest_note: formData.note,
+        studio_id: studioId ? parseInt(studioId) : undefined
+      })
+      
+      if (result.success && result.reservation) {
+        const params = new URLSearchParams()
+        params.set('reservation_id', result.reservation.id.toString())
+        params.set('name', formData.name)
+        params.set('email', formData.email)
+        params.set('type', 'free')
+        router.push(`/complete?${params.toString()}`)
+      } else {
+        setError(result.message || '予約に失敗しました')
+      }
+    } catch (err) {
+      setError('予約処理中にエラーが発生しました')
+      console.error(err)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target
+    setFormData(prev => ({ ...prev, [name]: value }))
+    if (formErrors[name as keyof FormErrors]) {
+      setFormErrors(prev => ({ ...prev, [name]: undefined }))
+    }
+  }
+
+  // 日時のフォーマット
+  const formattedDate = dateStr 
+    ? format(parse(dateStr, 'yyyy-MM-dd', new Date()), 'yyyy年M月d日(E)', { locale: ja })
+    : ''
+
+  if (loading) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-primary-200 border-t-primary-500 rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-accent-600">読み込み中...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (error && !selectedProgram) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-5xl mb-4">😢</div>
+          <p className="text-accent-600 mb-4">{error}</p>
+          <button onClick={() => router.back()} className="btn-secondary">
+            戻る
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto px-4 py-8">
+      {/* Back Button */}
+      <button
+        onClick={() => router.back()}
+        className="flex items-center gap-2 text-accent-600 hover:text-primary-600 mb-6 transition-colors"
+      >
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+        </svg>
+        日時選択に戻る
+      </button>
+
+      {/* Reservation Summary */}
+      <div className="card mb-8 animate-fade-in">
+        <h2 className="font-display font-bold text-lg text-accent-800 mb-4">
+          ご予約内容
+        </h2>
+        <div className="space-y-3">
+          <div className="flex items-center gap-3 pt-3 border-t border-accent-100">
+            <div className="w-10 h-10 bg-accent-100 rounded-lg flex items-center justify-center">
+              <svg className="w-5 h-5 text-accent-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+            </div>
+            <div>
+              <div className="font-medium text-accent-900">{formattedDate}</div>
+              <div className="text-sm text-accent-500">{timeStr} 〜</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-primary-100 rounded-lg flex items-center justify-center">
+              <svg className="w-5 h-5 text-primary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <div>
+              <div className="font-medium text-accent-900">自由枠予約</div>
+              <div className="text-sm text-accent-500">空いているスタッフを自動で割り当て</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Program Selection */}
+      {programs.length > 1 && (
+        <div className="card mb-8 animate-fade-in-delay-1">
+          <h2 className="font-display font-bold text-lg text-accent-800 mb-4">
+            メニューを選択
+          </h2>
+          <div className="space-y-2">
+            {programs.map((program) => (
+              <button
+                key={program.id}
+                onClick={() => setSelectedProgram(program)}
+                className={`w-full p-4 rounded-xl text-left transition-all ${
+                  selectedProgram?.id === program.id
+                    ? 'bg-primary-50 border-2 border-primary-500'
+                    : 'bg-white border border-accent-200 hover:border-primary-300'
+                }`}
+              >
+                <div className="font-medium text-accent-900">{program.name}</div>
+                <div className="flex items-center gap-3 mt-1 text-sm text-accent-500">
+                  {program.duration && <span>{program.duration}分</span>}
+                  {program.price && <span>¥{program.price.toLocaleString()}</span>}
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Selected Program Summary (if only one) */}
+      {programs.length === 1 && selectedProgram && (
+        <div className="card mb-8 animate-fade-in-delay-1">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-gradient-to-br from-primary-100 to-primary-200 rounded-lg flex items-center justify-center">
+              <span className="text-xl">🌿</span>
+            </div>
+            <div>
+              <div className="font-medium text-accent-900">{selectedProgram.name}</div>
+              <div className="text-sm text-accent-500">
+                {selectedProgram.duration}分 / ¥{selectedProgram.price?.toLocaleString()}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Booking Form */}
+      <form onSubmit={handleSubmit} className="card animate-fade-in-delay-2">
+        <h2 className="font-display font-bold text-lg text-accent-800 mb-6">
+          お客様情報
+        </h2>
+        
+        <div className="space-y-5">
+          {/* Name */}
+          <div>
+            <label htmlFor="name" className="label">
+              お名前 <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              id="name"
+              name="name"
+              value={formData.name}
+              onChange={handleInputChange}
+              className={`input-field ${formErrors.name ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : ''}`}
+              placeholder="山田 太郎"
+            />
+            {formErrors.name && (
+              <p className="text-sm text-red-500 mt-1">{formErrors.name}</p>
+            )}
+          </div>
+
+          {/* Name Kana */}
+          <div>
+            <label htmlFor="nameKana" className="label">
+              お名前（フリガナ）
+            </label>
+            <input
+              type="text"
+              id="nameKana"
+              name="nameKana"
+              value={formData.nameKana}
+              onChange={handleInputChange}
+              className="input-field"
+              placeholder="ヤマダ タロウ"
+            />
+          </div>
+
+          {/* Email */}
+          <div>
+            <label htmlFor="email" className="label">
+              メールアドレス <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="email"
+              id="email"
+              name="email"
+              value={formData.email}
+              onChange={handleInputChange}
+              className={`input-field ${formErrors.email ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : ''}`}
+              placeholder="example@email.com"
+            />
+            {formErrors.email && (
+              <p className="text-sm text-red-500 mt-1">{formErrors.email}</p>
+            )}
+            <p className="text-xs text-accent-500 mt-1">
+              予約確認メールをお送りします
+            </p>
+          </div>
+
+          {/* Phone */}
+          <div>
+            <label htmlFor="phone" className="label">
+              電話番号 <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="tel"
+              id="phone"
+              name="phone"
+              value={formData.phone}
+              onChange={handleInputChange}
+              className={`input-field ${formErrors.phone ? 'border-red-300 focus:border-red-400 focus:ring-red-100' : ''}`}
+              placeholder="090-1234-5678"
+            />
+            {formErrors.phone && (
+              <p className="text-sm text-red-500 mt-1">{formErrors.phone}</p>
+            )}
+          </div>
+
+          {/* Note */}
+          <div>
+            <label htmlFor="note" className="label">
+              備考
+            </label>
+            <textarea
+              id="note"
+              name="note"
+              value={formData.note}
+              onChange={handleInputChange}
+              className="input-field min-h-[100px] resize-none"
+              placeholder="ご要望やご質問があればご記入ください"
+            />
+          </div>
+        </div>
+
+        {/* Error Message */}
+        {error && (
+          <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
+            {error}
+          </div>
+        )}
+
+        {/* Submit Button */}
+        <div className="mt-8">
+          <button
+            type="submit"
+            disabled={submitting || !selectedProgram}
+            className="w-full btn-primary disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {submitting ? (
+              <>
+                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                予約処理中...
+              </>
+            ) : (
+              '予約を確定する'
+            )}
+          </button>
+          <p className="text-xs text-accent-500 text-center mt-3">
+            「予約を確定する」をクリックすると、入力されたメールアドレスに確認メールが送信されます
+          </p>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+export default function FreeBookingPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-primary-200 border-t-primary-500 rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-accent-600">読み込み中...</p>
+        </div>
+      </div>
+    }>
+      <FreeBookingContent />
+    </Suspense>
+  )
+}
+

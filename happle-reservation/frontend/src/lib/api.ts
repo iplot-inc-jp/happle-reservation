@@ -3,7 +3,7 @@
  * バックエンドAPIとの通信を行うクライアント
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5021'
 
 interface ApiResponse<T> {
   data?: T
@@ -98,6 +98,72 @@ export interface ReservationRequest {
   guest_phone: string
   guest_note?: string
   studio_id?: number
+  gender?: number
+  birthday?: string
+}
+
+// 自由枠予約用
+export interface ChoiceReservationRequest {
+  studio_room_id: number
+  program_id: number
+  start_at: string  // yyyy-MM-dd HH:mm:ss.fff形式
+  guest_name: string
+  guest_name_kana?: string
+  guest_email: string
+  guest_phone: string
+  guest_note?: string
+  studio_id?: number
+  instructor_ids?: number[]
+  gender?: number
+  birthday?: string
+}
+
+export interface ChoiceSchedule {
+  date: string
+  studio_room_service: {
+    id: number
+    name: string
+    studio_room_id: number
+    schedule_nick: number  // 時間の刻み（分）
+  }
+  shift: {
+    id: number
+    period: number
+  } | null
+  shift_studio_business_hour: Array<{
+    id: number
+    date: string
+    start_at: string
+    end_at: string
+    is_holiday: boolean
+  }>
+  shift_instructor: Array<{
+    id: number
+    instructor_id: number
+    date: string
+    start_at: string
+    end_at: string
+  }>
+  reservation_assign_instructor: Array<{
+    reservation_id: number
+    entity_id: number
+    date: string
+    start_at: string
+    end_at: string
+  }>
+}
+
+export interface AvailableInstructor {
+  id: number
+  start_at: string
+  end_at: string
+}
+
+export interface StudioRoom {
+  id: number
+  name: string
+  code: string
+  studio_id: number
 }
 
 // ==================== API Functions ====================
@@ -180,5 +246,65 @@ export async function cancelReservation(
   }
   
   return { success: response.data?.success || false }
+}
+
+// ==================== 自由枠予約 API ====================
+
+export async function getStudioRooms(studioId?: number): Promise<StudioRoom[]> {
+  const params = studioId ? `?studio_id=${studioId}` : ''
+  const response = await fetchApi<{ studio_rooms: StudioRoom[] }>(`/api/studio-rooms${params}`)
+  return response.data?.studio_rooms || []
+}
+
+export async function getChoiceSchedule(
+  studioRoomId: number,
+  date: string
+): Promise<ChoiceSchedule | null> {
+  const response = await fetchApi<{ schedule: ChoiceSchedule }>(
+    `/api/choice-schedule?studio_room_id=${studioRoomId}&date=${date}`
+  )
+  return response.data?.schedule || null
+}
+
+export async function getAvailableInstructors(params: {
+  studio_room_id: number
+  date: string
+  start_time: string
+  duration_minutes?: number
+}): Promise<AvailableInstructor[]> {
+  const searchParams = new URLSearchParams()
+  searchParams.set('studio_room_id', params.studio_room_id.toString())
+  searchParams.set('date', params.date)
+  searchParams.set('start_time', params.start_time)
+  if (params.duration_minutes) {
+    searchParams.set('duration_minutes', params.duration_minutes.toString())
+  }
+  
+  const response = await fetchApi<{ available_instructors: AvailableInstructor[] }>(
+    `/api/instructors/available?${searchParams.toString()}`
+  )
+  return response.data?.available_instructors || []
+}
+
+export async function createChoiceReservation(
+  data: ChoiceReservationRequest
+): Promise<{ success: boolean; reservation?: Reservation; error?: string; message?: string }> {
+  const response = await fetchApi<{ success: boolean; reservation: Reservation; message: string }>(
+    '/api/reservations/choice',
+    {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }
+  )
+  
+  if (response.error) {
+    return { success: false, error: response.error, message: response.message }
+  }
+  
+  return {
+    success: response.data?.success || false,
+    reservation: response.data?.reservation,
+    message: response.data?.message,
+  }
 }
 

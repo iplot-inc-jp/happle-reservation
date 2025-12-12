@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>architecture.md</title>
+<meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+
+<style>
+/* https://github.com/microsoft/vscode/blob/master/extensions/markdown-language-features/media/markdown.css */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+	font-family: var(--vscode-markdown-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif);
+	font-size: var(--vscode-markdown-font-size, 14px);
+	padding: 0 26px;
+	line-height: var(--vscode-markdown-line-height, 22px);
+	word-wrap: break-word;
+}
+
+#code-csp-warning {
+	position: fixed;
+	top: 0;
+	right: 0;
+	color: white;
+	margin: 16px;
+	text-align: center;
+	font-size: 12px;
+	font-family: sans-serif;
+	background-color:#444444;
+	cursor: pointer;
+	padding: 6px;
+	box-shadow: 1px 1px 1px rgba(0,0,0,.25);
+}
+
+#code-csp-warning:hover {
+	text-decoration: none;
+	background-color:#007acc;
+	box-shadow: 2px 2px 2px rgba(0,0,0,.25);
+}
+
+body.scrollBeyondLastLine {
+	margin-bottom: calc(100vh - 22px);
+}
+
+body.showEditorSelection .code-line {
+	position: relative;
+}
+
+body.showEditorSelection .code-active-line:before,
+body.showEditorSelection .code-line:hover:before {
+	content: "";
+	display: block;
+	position: absolute;
+	top: 0;
+	left: -12px;
+	height: 100%;
+}
+
+body.showEditorSelection li.code-active-line:before,
+body.showEditorSelection li.code-line:hover:before {
+	left: -30px;
+}
+
+.vscode-light.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.15);
+}
+
+.vscode-light.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.40);
+}
+
+.vscode-light.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-dark.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.4);
+}
+
+.vscode-dark.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.60);
+}
+
+.vscode-dark.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-high-contrast.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 160, 0, 0.7);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 160, 0, 1);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+img {
+	max-width: 100%;
+	max-height: 100%;
+}
+
+a {
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+a:focus,
+input:focus,
+select:focus,
+textarea:focus {
+	outline: 1px solid -webkit-focus-ring-color;
+	outline-offset: -1px;
+}
+
+hr {
+	border: 0;
+	height: 2px;
+	border-bottom: 2px solid;
+}
+
+h1 {
+	padding-bottom: 0.3em;
+	line-height: 1.2;
+	border-bottom-width: 1px;
+	border-bottom-style: solid;
+}
+
+h1, h2, h3 {
+	font-weight: normal;
+}
+
+table {
+	border-collapse: collapse;
+}
+
+table > thead > tr > th {
+	text-align: left;
+	border-bottom: 1px solid;
+}
+
+table > thead > tr > th,
+table > thead > tr > td,
+table > tbody > tr > th,
+table > tbody > tr > td {
+	padding: 5px 10px;
+}
+
+table > tbody > tr + tr > td {
+	border-top: 1px solid;
+}
+
+blockquote {
+	margin: 0 7px 0 5px;
+	padding: 0 16px 0 10px;
+	border-left-width: 5px;
+	border-left-style: solid;
+}
+
+code {
+	font-family: Menlo, Monaco, Consolas, "Droid Sans Mono", "Courier New", monospace, "Droid Sans Fallback";
+	font-size: 1em;
+	line-height: 1.357em;
+}
+
+body.wordWrap pre {
+	white-space: pre-wrap;
+}
+
+pre:not(.hljs),
+pre.hljs code > div {
+	padding: 16px;
+	border-radius: 3px;
+	overflow: auto;
+}
+
+pre code {
+	color: var(--vscode-editor-foreground);
+	tab-size: 4;
+}
+
+/** Theming */
+
+.vscode-light pre {
+	background-color: rgba(220, 220, 220, 0.4);
+}
+
+.vscode-dark pre {
+	background-color: rgba(10, 10, 10, 0.4);
+}
+
+.vscode-high-contrast pre {
+	background-color: rgb(0, 0, 0);
+}
+
+.vscode-high-contrast h1 {
+	border-color: rgb(0, 0, 0);
+}
+
+.vscode-light table > thead > tr > th {
+	border-color: rgba(0, 0, 0, 0.69);
+}
+
+.vscode-dark table > thead > tr > th {
+	border-color: rgba(255, 255, 255, 0.69);
+}
+
+.vscode-light h1,
+.vscode-light hr,
+.vscode-light table > tbody > tr + tr > td {
+	border-color: rgba(0, 0, 0, 0.18);
+}
+
+.vscode-dark h1,
+.vscode-dark hr,
+.vscode-dark table > tbody > tr + tr > td {
+	border-color: rgba(255, 255, 255, 0.18);
+}
+
+</style>
+
+<style>
+/* Tomorrow Theme */
+/* http://jmblog.github.com/color-themes-for-google-code-highlightjs */
+/* Original theme - https://github.com/chriskempson/tomorrow-theme */
+
+/* Tomorrow Comment */
+.hljs-comment,
+.hljs-quote {
+	color: #8e908c;
+}
+
+/* Tomorrow Red */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-deletion {
+	color: #c82829;
+}
+
+/* Tomorrow Orange */
+.hljs-number,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-literal,
+.hljs-type,
+.hljs-params,
+.hljs-meta,
+.hljs-link {
+	color: #f5871f;
+}
+
+/* Tomorrow Yellow */
+.hljs-attribute {
+	color: #eab700;
+}
+
+/* Tomorrow Green */
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+	color: #718c00;
+}
+
+/* Tomorrow Blue */
+.hljs-title,
+.hljs-section {
+	color: #4271ae;
+}
+
+/* Tomorrow Purple */
+.hljs-keyword,
+.hljs-selector-tag {
+	color: #8959a8;
+}
+
+.hljs {
+	display: block;
+	overflow-x: auto;
+	color: #4d4d4c;
+	padding: 0.5em;
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: bold;
+}
+</style>
+
+<style>
+/*
+ * Markdown PDF CSS
+ */
+
+ body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif, "Meiryo";
+	padding: 0 12px;
+}
+
+pre {
+	background-color: #f8f8f8;
+	border: 1px solid #cccccc;
+	border-radius: 3px;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+}
+
+pre:not(.hljs) {
+	padding: 23px;
+	line-height: 19px;
+}
+
+blockquote {
+	background: rgba(127, 127, 127, 0.1);
+	border-color: rgba(0, 122, 204, 0.5);
+}
+
+.emoji {
+	height: 1.4em;
+}
+
+code {
+	font-size: 14px;
+	line-height: 19px;
+}
+
+/* for inline code */
+:not(pre):not(.hljs) > code {
+	color: #C9AE75; /* Change the old color so it seems less like an error */
+	font-size: inherit;
+}
+
+/* Page Break : use <div class="page"/> to insert page break
+-------------------------------------------------------- */
+.page {
+	page-break-after: always;
+}
+
+</style>
+
+<script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast')
+          ? 'dark'
+          : 'default'
+    });
+  </script>
+<h1 id="happle-%E4%BA%88%E7%B4%84%E3%82%B7%E3%82%B9%E3%83%86%E3%83%A0-%E3%82%A2%E3%83%BC%E3%82%AD%E3%83%86%E3%82%AF%E3%83%81%E3%83%A3">Happle 予約システム アーキテクチャ</h1>
+<h2 id="1-%E3%82%B7%E3%82%B9%E3%83%86%E3%83%A0%E6%A6%82%E8%A6%81">1. システム概要</h2>
+<p>hacomono Admin APIを使用した「黄土韓方よもぎ蒸し Happle」のゲスト向けオンライン予約システム。</p>
+<h2 id="2-%E3%82%B7%E3%82%B9%E3%83%86%E3%83%A0%E6%A7%8B%E6%88%90">2. システム構成</h2>
+<pre><code class="language-mermaid"><div class="mermaid">flowchart TB
+    subgraph client [クライアント]
+        Browser[ブラウザ]
+    end
+    
+    subgraph render [Render Cloud]
+        subgraph frontend [Frontend Service]
+            NextJS[Next.js App]
+        end
+        
+        subgraph backend [Backend Service]
+            Flask[Flask API]
+            TokenMgr[Token Manager]
+        end
+    end
+    
+    subgraph hacomono [hacomono]
+        HacomonoAPI[Admin API]
+        HacomonoAdmin[管理サイト]
+    end
+    
+    Browser -->|HTTPS| NextJS
+    NextJS -->|REST API| Flask
+    Flask -->|Bearer Token| HacomonoAPI
+    TokenMgr -->|OAuth Refresh| HacomonoAdmin
+</div></code></pre>
+<h2 id="3-%E3%83%A6%E3%83%BC%E3%82%B6%E3%83%BC%E3%83%95%E3%83%AD%E3%83%BC">3. ユーザーフロー</h2>
+<pre><code class="language-mermaid"><div class="mermaid">flowchart LR
+    Start([開始]) --> SelectMenu[メニュー選択]
+    SelectMenu --> SelectDate[日時選択]
+    SelectDate --> InputInfo[情報入力]
+    InputInfo --> Confirm{確認}
+    Confirm -->|OK| Complete([予約完了])
+    Confirm -->|戻る| InputInfo
+    
+    style Start fill:#e8f5e9
+    style Complete fill:#e8f5e9
+</div></code></pre>
+<h3 id="%E7%94%BB%E9%9D%A2%E9%81%B7%E7%A7%BB">画面遷移</h3>
+<pre><code class="language-mermaid"><div class="mermaid">stateDiagram-v2
+    [*] --> TopPage: アクセス
+    TopPage --> SchedulePage: プログラム選択
+    SchedulePage --> TopPage: 戻る
+    SchedulePage --> BookingPage: 日時選択
+    BookingPage --> SchedulePage: 戻る
+    BookingPage --> CompletePage: 予約確定
+    CompletePage --> TopPage: トップへ
+    CompletePage --> [*]: 終了
+</div></code></pre>
+<h2 id="4-%E4%BA%88%E7%B4%84%E4%BD%9C%E6%88%90%E3%82%B7%E3%83%BC%E3%82%B1%E3%83%B3%E3%82%B9">4. 予約作成シーケンス</h2>
+<pre><code class="language-mermaid"><div class="mermaid">sequenceDiagram
+    autonumber
+    participant U as ユーザー
+    participant F as Frontend
+    participant B as Backend
+    participant H as hacomono API
+    
+    U->>F: 予約情報送信
+    F->>B: POST /api/reservations
+    
+    Note over B: ゲスト会員作成
+    B->>H: POST /member/members
+    H-->>B: member_id
+    
+    Note over B: 予約作成
+    B->>H: POST /reservation/reservations/reserve
+    H-->>B: reservation
+    
+    B-->>F: 予約完了レスポンス
+    F-->>U: 完了画面表示
+    
+    Note over H: 確認メール送信
+    H->>U: 予約確認メール
+</div></code></pre>
+<h2 id="5-api%E8%A8%AD%E8%A8%88">5. API設計</h2>
+<h3 id="%E3%82%A8%E3%83%B3%E3%83%89%E3%83%9D%E3%82%A4%E3%83%B3%E3%83%88%E4%B8%80%E8%A6%A7">エンドポイント一覧</h3>
+<pre><code class="language-mermaid"><div class="mermaid">flowchart LR
+    subgraph BackendAPI [Backend REST API]
+        Health[GET /api/health]
+        Studios[GET /api/studios]
+        Programs[GET /api/programs]
+        Schedule[GET /api/schedule]
+        CreateRes[POST /api/reservations]
+        GetRes[GET /api/reservations/:id]
+        CancelRes[POST /api/reservations/:id/cancel]
+    end
+    
+    subgraph HacomonoAPI [hacomono Admin API]
+        MasterStudios[GET /master/studios]
+        MasterPrograms[GET /master/programs]
+        MasterLessons[GET /master/studio-lessons]
+        MemberCreate[POST /member/members]
+        ResReserve[POST /reservation/reservations/reserve]
+        ResGet[GET /reservation/reservations/:id]
+        ResCancel[PUT /reservation/reservations/cancel]
+    end
+    
+    Studios --> MasterStudios
+    Programs --> MasterPrograms
+    Schedule --> MasterLessons
+    CreateRes --> MemberCreate
+    CreateRes --> ResReserve
+    GetRes --> ResGet
+    CancelRes --> ResCancel
+</div></code></pre>
+<h3 id="%E3%83%87%E3%83%BC%E3%82%BF%E3%83%95%E3%83%AD%E3%83%BC">データフロー</h3>
+<pre><code class="language-mermaid"><div class="mermaid">flowchart TD
+    subgraph Request [リクエスト]
+        ReqData[予約リクエスト]
+    end
+    
+    subgraph Processing [処理]
+        Validate[バリデーション]
+        CreateMember[会員作成]
+        CreateReservation[予約作成]
+    end
+    
+    subgraph Response [レスポンス]
+        Success[成功レスポンス]
+        Error[エラーレスポンス]
+    end
+    
+    ReqData --> Validate
+    Validate -->|OK| CreateMember
+    Validate -->|NG| Error
+    CreateMember -->|成功| CreateReservation
+    CreateMember -->|失敗| Error
+    CreateReservation -->|成功| Success
+    CreateReservation -->|失敗| Error
+</div></code></pre>
+<h2 id="6-%E8%AA%8D%E8%A8%BC%E3%83%95%E3%83%AD%E3%83%BC">6. 認証フロー</h2>
+<h3 id="oauth-20-authorization-code-grant">OAuth 2.0 Authorization Code Grant</h3>
+<pre><code class="language-mermaid"><div class="mermaid">sequenceDiagram
+    autonumber
+    participant Admin as 管理者
+    participant Browser as ブラウザ
+    participant HacomonoAuth as hacomono認証
+    participant Backend as Backend
+    
+    Admin->>Browser: 認証URL開く
+    Browser->>HacomonoAuth: GET /oauth/login
+    HacomonoAuth->>Browser: ログイン画面
+    Admin->>Browser: 認証情報入力
+    Browser->>HacomonoAuth: ログイン
+    HacomonoAuth->>Browser: 認可画面
+    Admin->>Browser: 許可
+    HacomonoAuth->>Browser: redirect with code
+    Browser->>Backend: code送信
+    Backend->>HacomonoAuth: POST /oauth/token
+    HacomonoAuth->>Backend: access_token, refresh_token
+    Backend->>Backend: トークン保存
+</div></code></pre>
+<h3 id="%E3%83%88%E3%83%BC%E3%82%AF%E3%83%B3%E3%83%AA%E3%83%95%E3%83%AC%E3%83%83%E3%82%B7%E3%83%A5">トークンリフレッシュ</h3>
+<pre><code class="language-mermaid"><div class="mermaid">sequenceDiagram
+    participant B as Backend
+    participant H as hacomono API
+    
+    B->>H: APIリクエスト
+    H-->>B: 401 Unauthorized
+    
+    Note over B: トークン期限切れ検出
+    
+    B->>H: POST /oauth/token (refresh)
+    H-->>B: 新しいaccess_token
+    
+    B->>H: APIリクエスト (リトライ)
+    H-->>B: 成功レスポンス
+</div></code></pre>
+<h2 id="7-%E6%8A%80%E8%A1%93%E3%82%B9%E3%82%BF%E3%83%83%E3%82%AF">7. 技術スタック</h2>
+<pre><code class="language-mermaid"><div class="mermaid">mindmap
+    root((Happle予約システム))
+        Frontend
+            Next.js 14
+            TypeScript
+            Tailwind CSS
+            date-fns
+        Backend
+            Flask
+            Python 3.11
+            Gunicorn
+            Requests
+        Infrastructure
+            Render
+            Docker
+        External
+            hacomono API
+            OAuth 2.0
+</div></code></pre>
+<h2 id="8-%E3%83%87%E3%83%97%E3%83%AD%E3%82%A4%E6%A7%8B%E6%88%90">8. デプロイ構成</h2>
+<pre><code class="language-mermaid"><div class="mermaid">flowchart TB
+    subgraph GitHub [GitHub Repository]
+        Code[ソースコード]
+        RenderYAML[render.yaml]
+    end
+    
+    subgraph Render [Render Platform]
+        subgraph Services [Web Services]
+            FE[Frontend<br/>Next.js Docker]
+            BE[Backend<br/>Python Flask]
+        end
+        
+        subgraph Config [環境変数]
+            EnvFE[NEXT_PUBLIC_API_URL]
+            EnvBE[HACOMONO_ACCESS_TOKEN<br/>HACOMONO_REFRESH_TOKEN<br/>HACOMONO_CLIENT_ID<br/>HACOMONO_CLIENT_SECRET]
+        end
+    end
+    
+    Code --> FE
+    Code --> BE
+    RenderYAML --> Services
+    EnvFE --> FE
+    EnvBE --> BE
+</div></code></pre>
+<h2 id="9-%E3%82%A8%E3%83%A9%E3%83%BC%E3%83%8F%E3%83%B3%E3%83%89%E3%83%AA%E3%83%B3%E3%82%B0">9. エラーハンドリング</h2>
+<pre><code class="language-mermaid"><div class="mermaid">flowchart TD
+    Request[APIリクエスト] --> Check{レスポンス確認}
+    
+    Check -->|200| Success[成功処理]
+    Check -->|400| BadRequest[パラメータエラー表示]
+    Check -->|401| Unauthorized[トークンリフレッシュ]
+    Check -->|403| Forbidden[権限エラー表示]
+    Check -->|404| NotFound[リソースなしエラー]
+    Check -->|429| RateLimit[待機してリトライ]
+    Check -->|500| ServerError[サーバーエラー表示]
+    
+    Unauthorized --> Retry{リトライ}
+    RateLimit --> Retry
+    Retry -->|成功| Success
+    Retry -->|失敗| Error[エラー表示]
+</div></code></pre>
+<h2 id="10-%E3%82%BB%E3%82%AD%E3%83%A5%E3%83%AA%E3%83%86%E3%82%A3">10. セキュリティ</h2>
+<pre><code class="language-mermaid"><div class="mermaid">flowchart LR
+    subgraph Security [セキュリティ対策]
+        direction TB
+        Token[トークン管理<br/>環境変数で管理]
+        CORS[CORS設定<br/>許可オリジン指定]
+        Validate[入力バリデーション<br/>F/B両方で実施]
+        RateLimit[Rate Limit対応<br/>リトライロジック]
+        HTTPS[HTTPS通信<br/>SSL/TLS]
+    end
+</div></code></pre>
+<h2 id="11-%E4%BB%8A%E5%BE%8C%E3%81%AE%E6%8B%A1%E5%BC%B5">11. 今後の拡張</h2>
+<pre><code class="language-mermaid"><div class="mermaid">timeline
+    title 機能拡張ロードマップ
+    
+    Phase 1 : 基本機能
+             : プログラム予約
+             : ゲスト予約
+    
+    Phase 2 : 機能強化
+             : 予約キャンセル
+             : リマインダー通知
+             : 複数店舗対応
+    
+    Phase 3 : 高度な機能
+             : オンライン決済
+             : 会員登録・ログイン
+             : マイページ
+</div></code></pre>
+
+</body>
+</html>

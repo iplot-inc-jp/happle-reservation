@@ -204,16 +204,33 @@ class HacomonoClient:
         """プログラムを取得"""
         return self.get(f"/master/programs/{program_id}")
     
-    def get_studio_lessons(self, query: Optional[Dict] = None, fetch_all: bool = True) -> Dict[str, Any]:
+    def get_studio_lessons(
+        self, 
+        query: Optional[Dict] = None, 
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        fetch_all: bool = True
+    ) -> Dict[str, Any]:
         """レッスンスケジュール一覧を取得
         
         Args:
             query: 検索クエリ
+            date_from: 開始日 (YYYY-MM-DD)
+            date_to: 終了日 (YYYY-MM-DD)
             fetch_all: Trueの場合、全ページを取得して結合
         """
-        params = {"length": 100}  # 1ページあたり最大100件
-        if query:
-            params["query"] = json.dumps(query)
+        # クエリを構築
+        q = query.copy() if query else {}
+        if date_from:
+            q["date_from"] = date_from
+        if date_to:
+            q["date_to"] = date_to
+        
+        params = {"length": 100}
+        if q:
+            params["query"] = json.dumps(q)
+        
+        logger.info(f"Fetching studio lessons with query: {q}")
         
         # 最初のページを取得
         result = self.get("/master/studio-lessons", params=params)
@@ -226,7 +243,7 @@ class HacomonoClient:
         total_count = result.get("data", {}).get("studio_lessons", {}).get("total_count", 0)
         total_pages = result.get("data", {}).get("studio_lessons", {}).get("total_page", 1)
         
-        logger.info(f"Fetching studio lessons: total_count={total_count}, total_pages={total_pages}")
+        logger.info(f"Studio lessons: total_count={total_count}, total_pages={total_pages}")
         
         # 2ページ目以降を取得
         for page in range(2, total_pages + 1):
@@ -234,7 +251,6 @@ class HacomonoClient:
             page_result = self.get("/master/studio-lessons", params=params)
             page_lessons = page_result.get("data", {}).get("studio_lessons", {}).get("list", [])
             all_lessons.extend(page_lessons)
-            logger.info(f"Fetched page {page}: {len(page_lessons)} lessons")
         
         # 結果を再構築
         result["data"]["studio_lessons"]["list"] = all_lessons
@@ -252,6 +268,17 @@ class HacomonoClient:
         if query:
             params["query"] = json.dumps(query)
         return self.get("/master/instructors", params=params)
+    
+    def get_studio_rooms(self, query: Optional[Dict] = None) -> Dict[str, Any]:
+        """スタジオルーム一覧を取得"""
+        params = {}
+        if query:
+            params["query"] = json.dumps(query)
+        return self.get("/master/studio-rooms", params=params)
+    
+    def get_studio_room(self, studio_room_id: int) -> Dict[str, Any]:
+        """スタジオルームを取得"""
+        return self.get(f"/master/studio-rooms/{studio_room_id}")
     
     # ==================== 会員 API ====================
     
@@ -293,12 +320,83 @@ class HacomonoClient:
         return self.get("/reservation/reservations/context", params=query_params)
     
     def create_reservation(self, reservation_data: Dict) -> Dict[str, Any]:
-        """予約を作成（固定枠）"""
+        """予約を作成（固定枠レッスン予約）
+        
+        Args:
+            reservation_data: {
+                "member_id": int,
+                "studio_lesson_id": int,
+                "no": str,  # スペース番号（必須）
+                "member_ticket_id": int (optional)
+            }
+        """
         return self.post("/reservation/reservations/reserve", data=reservation_data)
+    
+    def create_choice_reservation(self, reservation_data: Dict) -> Dict[str, Any]:
+        """自由枠予約を作成
+        
+        Args:
+            reservation_data: {
+                "member_id": int,
+                "studio_room_id": int,
+                "program_id": int,
+                "ticket_id": int,  # チケットID（必須）
+                "instructor_ids": List[int],  # スタッフID（必須）
+                "start_at": str,  # 開始日時（yyyy-MM-dd HH:mm:ss.fff形式）
+                "contract_group_no": str (optional),
+                "resource_id_set": List[Dict] (optional),
+                "item_code": str (optional),
+                "reservation_note": str (optional),
+                "is_cash_payment": bool (optional),
+                "is_send_mail": bool (optional)
+            }
+        """
+        return self.post("/reservation/reservations/choice/reserve", data=reservation_data)
+    
+    def get_choice_schedule(self, studio_room_id: int, date: Optional[str] = None) -> Dict[str, Any]:
+        """自由枠予約スケジュールを取得
+        
+        Args:
+            studio_room_id: 予約カテゴリID
+            date: 営業日（yyyy-MM-dd形式、未指定時は当日）
+        """
+        params = {"studio_room_id": studio_room_id}
+        if date:
+            params["query"] = json.dumps({"date": date})
+        return self.get("/reservation/reservations/choice/schedule", params=params)
+    
+    def get_choice_reserve_context(self, context_data: Dict) -> Dict[str, Any]:
+        """自由枠予約詳細コンテキストを取得
+        
+        Args:
+            context_data: {
+                "member_id": int,
+                "studio_room_id": int,
+                "program_id": int,
+                "start_at": str (yyyy-MM-dd HH:mm:ss.fff形式)
+            }
+        """
+        return self.post("/reservation/reservations/choice/reserve-context", data=context_data)
     
     def cancel_reservation(self, reservation_ids: List[int]) -> Dict[str, Any]:
         """予約をキャンセル"""
         return self.put("/reservation/reservations/cancel", data={"ids": reservation_ids})
+    
+    # ==================== チケット API ====================
+    
+    def get_tickets(self, query: Optional[Dict] = None) -> Dict[str, Any]:
+        """チケット一覧を取得"""
+        params = {}
+        if query:
+            params["query"] = json.dumps(query)
+        return self.get("/master/tickets", params=params)
+    
+    def grant_ticket_to_member(self, member_id: int, ticket_id: int, num: int) -> Dict[str, Any]:
+        """メンバーにチケットを付与"""
+        return self.post(f"/member/members/{member_id}/tickets", data={
+            "ticket_id": ticket_id,
+            "num": num
+        })
 
 
 # ==================== 例外クラス ====================

@@ -183,6 +183,83 @@ def get_program(program_id: int):
     })
 
 
+@app.route("/api/instructors/available", methods=["GET"])
+@handle_errors
+def get_available_instructors():
+    """指定日時の空いているスタッフを取得（自由枠予約用）"""
+    client = get_hacomono_client()
+    
+    studio_room_id = request.args.get("studio_room_id", type=int)
+    date = request.args.get("date")  # YYYY-MM-DD
+    start_time = request.args.get("start_time")  # HH:mm:ss
+    duration_minutes = request.args.get("duration_minutes", type=int, default=30)
+    
+    if not studio_room_id or not date or not start_time:
+        return jsonify({"error": "Missing required parameters: studio_room_id, date, start_time"}), 400
+    
+    try:
+        # choice/scheduleからスタッフ情報を取得
+        schedule_response = client.get_choice_schedule(studio_room_id, date)
+        schedule = schedule_response.get("data", {}).get("schedule", {})
+        
+        # 利用可能なスタッフを取得
+        shift_instructors = schedule.get("shift_instructor", [])
+        reserved_instructors = schedule.get("reservation_assign_instructor", [])
+        
+        # 開始日時を構築
+        start_datetime = datetime.strptime(f"{date} {start_time}", "%Y-%m-%d %H:%M:%S")
+        end_datetime = start_datetime + timedelta(minutes=duration_minutes)
+        
+        # 予約済みのスタッフIDを取得（時間が重なっているもの）
+        reserved_instructor_ids = set()
+        for reserved in reserved_instructors:
+            try:
+                reserved_start_str = reserved.get("start_at", "")
+                reserved_end_str = reserved.get("end_at", "")
+                if not reserved_start_str or not reserved_end_str:
+                    continue
+                reserved_start = datetime.fromisoformat(reserved_start_str.replace("Z", "+00:00"))
+                reserved_end = datetime.fromisoformat(reserved_end_str.replace("Z", "+00:00"))
+                # 時間が重なっているかチェック
+                if start_datetime < reserved_end and end_datetime > reserved_start:
+                    reserved_instructor_ids.add(reserved.get("entity_id"))
+            except Exception as e:
+                logger.warning(f"Failed to parse reserved instructor time: {e}")
+                continue
+        
+        # 空いているスタッフを抽出
+        available_instructors = []
+        for instructor in shift_instructors:
+            instructor_id = instructor.get("instructor_id")
+            try:
+                instructor_start_str = instructor.get("start_at", "")
+                instructor_end_str = instructor.get("end_at", "")
+                if not instructor_start_str or not instructor_end_str:
+                    continue
+                instructor_start = datetime.fromisoformat(instructor_start_str.replace("Z", "+00:00"))
+                instructor_end = datetime.fromisoformat(instructor_end_str.replace("Z", "+00:00"))
+                
+                # シフト時間内で、予約が入っていないスタッフ
+                if (instructor_start <= start_datetime < instructor_end and 
+                    instructor_id not in reserved_instructor_ids):
+                    available_instructors.append({
+                        "id": instructor_id,
+                        "start_at": instructor.get("start_at"),
+                        "end_at": instructor.get("end_at")
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to parse instructor time: {e}")
+                continue
+        
+        return jsonify({
+            "available_instructors": available_instructors,
+            "total_count": len(available_instructors)
+        })
+    except HacomonoAPIError as e:
+        logger.error(f"Failed to get available instructors: {e}")
+        return jsonify({"error": "Failed to get available instructors", "message": str(e)}), 400
+
+
 # ==================== スケジュール API ====================
 
 def _parse_lessons(lessons, studio_id=None, program_id=None):
@@ -258,28 +335,19 @@ def get_schedule():
     if not end_date:
         end_date = (datetime.now() + timedelta(days=14)).strftime("%Y-%m-%d")
     
-    response = client.get_studio_lessons(None)
+    # hacomono APIのdate_from/date_toクエリを使用
+    query = {}
+    if studio_id:
+        query["studio_id"] = studio_id
+    
+    response = client.get_studio_lessons(
+        query=query if query else None,
+        date_from=start_date,
+        date_to=end_date
+    )
     lessons = response.get("data", {}).get("studio_lessons", {}).get("list", [])
     
-    # 日付フィルタリング
-    from datetime import datetime as dt
-    start_dt = dt.strptime(start_date, "%Y-%m-%d")
-    end_dt = dt.strptime(end_date, "%Y-%m-%d")
-    
-    filtered_lessons = []
-    for lesson in lessons:
-        lesson_start = lesson.get("start_at", "")
-        if lesson_start:
-            try:
-                # タイムゾーン部分を除去してパース
-                lesson_dt = dt.fromisoformat(lesson_start.replace("+09:00", "").replace("Z", ""))
-                if start_dt <= lesson_dt <= end_dt + timedelta(days=1):
-                    filtered_lessons.append(lesson)
-            except Exception as e:
-                logger.warning(f"Date parse error: {e}")
-                continue
-    
-    result = _parse_lessons(filtered_lessons, studio_id, program_id)
+    result = _parse_lessons(lessons, studio_id, program_id)
     
     return jsonify({
         "schedule": result,
@@ -294,10 +362,95 @@ def get_schedule():
 
 # ==================== 予約 API ====================
 
+def _parse_hacomono_error(error: HacomonoAPIError) -> dict:
+    """hacomonoエラーをユーザーフレンドリーなメッセージに変換"""
+    error_str = str(error)
+    
+    # よくあるエラーコードと日本語メッセージの対応
+    error_messages = {
+        "RSV_000309": "この時間帯は予約できません。営業時間外または予約可能期間外です。",
+        "RSV_000308": "スタッフが設定されていないか、選択したスタッフが無効です。",
+        "RSV_000005": "予約に必要なチケットがありません。",
+        "RSV_000001": "この枠は既に予約で埋まっています。",
+        "CMN_000051": "必要な情報が不足しています。",
+        "CMN_000001": "システムエラーが発生しました。",
+    }
+    
+    for code, message in error_messages.items():
+        if code in error_str:
+            return {"error_code": code, "user_message": message, "detail": error_str}
+    
+    return {"error_code": "UNKNOWN", "user_message": "予約処理中にエラーが発生しました。", "detail": error_str}
+
+
+def _create_guest_member(client, guest_name: str, guest_email: str, guest_phone: str, 
+                         guest_name_kana: str = "", guest_note: str = "",
+                         gender: int = 1, birthday: str = "2000-01-01", studio_id: int = 2):
+    """ゲストメンバーを作成し、チケットを付与"""
+    import secrets
+    import string
+    
+    # 名前を姓名に分割
+    name_parts = guest_name.split()
+    if len(name_parts) >= 2:
+        last_name = name_parts[0]
+        first_name = " ".join(name_parts[1:])
+    else:
+        last_name = guest_name
+        first_name = guest_name  # 名前が1つの場合は両方に設定
+    
+    # フリガナも分割
+    kana_parts = guest_name_kana.split() if guest_name_kana else []
+    if len(kana_parts) >= 2:
+        last_name_kana = kana_parts[0]
+        first_name_kana = " ".join(kana_parts[1:])
+    else:
+        last_name_kana = guest_name_kana or None
+        first_name_kana = guest_name_kana or None
+    
+    # ランダムパスワードを生成
+    random_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12)) + "!A1"
+    
+    member_data = {
+        "last_name": last_name,
+        "first_name": first_name,
+        "last_name_kana": last_name_kana,
+        "first_name_kana": first_name_kana,
+        "mail_address": guest_email,
+        "tel": guest_phone,
+        "plain_password": random_password,
+        "gender": gender,
+        "birthday": birthday,
+        "studio_id": studio_id,
+        "note": f"Web予約ゲスト: {guest_note}"
+    }
+    
+    # 1. メンバーを作成
+    member_response = client.create_member(member_data)
+    member_id = member_response.get("data", {}).get("member", {}).get("id")
+    
+    if not member_id:
+        raise ValueError("メンバーの作成に失敗しました")
+    
+    logger.info(f"Created member ID: {member_id}")
+    
+    # 2. チケットを付与（Web予約用チケット ID:5）
+    try:
+        ticket_response = client.grant_ticket_to_member(member_id, ticket_id=5, num=1)
+        member_ticket_id = ticket_response.get("data", {}).get("member_ticket", {}).get("id")
+        logger.info(f"Granted ticket, member_ticket_id: {member_ticket_id}")
+    except HacomonoAPIError as e:
+        # チケット付与に失敗した場合も続行（既存チケットがあるかも）
+        logger.warning(f"Failed to grant ticket: {e}")
+        member_ticket_id = None
+    
+    return member_id, member_ticket_id
+
+
 @app.route("/api/reservations", methods=["POST"])
 @handle_errors
 def create_reservation():
-    """予約を作成（ゲスト予約）"""
+    """固定枠予約を作成（ゲスト予約）"""
     client = get_hacomono_client()
     data = request.get_json()
     
@@ -305,50 +458,79 @@ def create_reservation():
     required_fields = ["studio_lesson_id", "guest_name", "guest_email", "guest_phone"]
     for field in required_fields:
         if not data.get(field):
-            return jsonify({"error": f"Missing required field: {field}"}), 400
+            return jsonify({
+                "success": False,
+                "error": f"入力が不足しています: {field}",
+                "error_code": "VALIDATION_ERROR"
+            }), 400
     
     studio_lesson_id = data["studio_lesson_id"]
-    guest_name = data["guest_name"]
-    guest_email = data["guest_email"]
-    guest_phone = data["guest_phone"]
-    guest_note = data.get("guest_note", "")
     
-    # 1. ゲストメンバーを作成（または既存を検索）
-    # 注: 実際の運用ではメールアドレスで既存メンバーを検索するロジックが必要
-    member_data = {
-        "name": guest_name,
-        "name_kana": data.get("guest_name_kana", ""),
-        "mail_address": guest_email,
-        "tel": guest_phone,
-        "is_guest": True,
-        "studio_id": data.get("studio_id", 1),  # デフォルト店舗
-        "note": f"Web予約ゲスト: {guest_note}"
-    }
-    
+    # 1. ゲストメンバーを作成してチケットを付与
     try:
-        member_response = client.create_member(member_data)
-        member_id = member_response.get("data", {}).get("member", {}).get("id")
+        member_id, member_ticket_id = _create_guest_member(
+            client=client,
+            guest_name=data["guest_name"],
+            guest_email=data["guest_email"],
+            guest_phone=data["guest_phone"],
+            guest_name_kana=data.get("guest_name_kana", ""),
+            guest_note=data.get("guest_note", ""),
+            gender=data.get("gender", 1),
+            birthday=data.get("birthday", "2000-01-01"),
+            studio_id=data.get("studio_id", 2)
+        )
     except HacomonoAPIError as e:
-        # メンバー作成に失敗した場合
+        error_info = _parse_hacomono_error(e)
         logger.error(f"Failed to create member: {e}")
-        return jsonify({"error": "Failed to create guest member", "message": str(e)}), 400
+        return jsonify({
+            "success": False,
+            "error": "ゲスト情報の登録に失敗しました",
+            "error_code": error_info["error_code"],
+            "message": error_info["user_message"],
+            "detail": error_info["detail"]
+        }), 400
+    except ValueError as e:
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "error_code": "MEMBER_CREATE_ERROR"
+        }), 400
     
-    if not member_id:
-        return jsonify({"error": "Failed to create guest member"}), 400
+    # 2. レッスン情報を取得してno値を決定
+    try:
+        lesson_response = client.get_studio_lesson(studio_lesson_id)
+        lesson = lesson_response.get("data", {}).get("studio_lesson", {})
+        space_no = data.get("space_no", "1")
+        logger.info(f"Lesson info: id={studio_lesson_id}, is_selectable_space={lesson.get('is_selectable_space')}")
+    except HacomonoAPIError as e:
+        logger.warning(f"Failed to get lesson info: {e}")
+        space_no = "1"
     
-    # 2. 予約を作成
+    # 3. 予約を作成
     reservation_data = {
         "member_id": member_id,
         "studio_lesson_id": studio_lesson_id,
-        "note": guest_note
+        "no": space_no
     }
     
+    if member_ticket_id:
+        reservation_data["member_ticket_id"] = member_ticket_id
+    
     try:
+        logger.info(f"Creating fixed reservation with data: {reservation_data}")
         reservation_response = client.create_reservation(reservation_data)
         reservation = reservation_response.get("data", {}).get("reservation", {})
+        logger.info(f"Fixed reservation created: {reservation.get('id')}")
     except HacomonoAPIError as e:
+        error_info = _parse_hacomono_error(e)
         logger.error(f"Failed to create reservation: {e}")
-        return jsonify({"error": "Failed to create reservation", "message": str(e)}), 400
+        return jsonify({
+            "success": False,
+            "error": "予約の作成に失敗しました",
+            "error_code": error_info["error_code"],
+            "message": error_info["user_message"],
+            "detail": error_info["detail"]
+        }), 400
     
     return jsonify({
         "success": True,
@@ -385,6 +567,194 @@ def get_reservation(reservation_id: int):
     })
 
 
+@app.route("/api/reservations/choice", methods=["POST"])
+@handle_errors
+def create_choice_reservation():
+    """自由枠予約を作成（ゲスト予約）"""
+    client = get_hacomono_client()
+    data = request.get_json()
+    
+    # 必須パラメータの検証
+    required_fields = ["studio_room_id", "program_id", "start_at", "guest_name", "guest_email", "guest_phone"]
+    for field in required_fields:
+        if not data.get(field):
+            return jsonify({"error": f"Missing required field: {field}"}), 400
+    
+    studio_room_id = data["studio_room_id"]
+    program_id = data["program_id"]
+    start_at = data["start_at"]  # yyyy-MM-dd HH:mm:ss.fff形式
+    guest_name = data["guest_name"]
+    guest_email = data["guest_email"]
+    guest_phone = data["guest_phone"]
+    guest_note = data.get("guest_note", "")
+    
+    # 1. ゲストメンバーを作成
+    name_parts = guest_name.split()
+    if len(name_parts) >= 2:
+        last_name = name_parts[0]
+        first_name = " ".join(name_parts[1:])
+    else:
+        last_name = guest_name
+        first_name = ""
+    
+    name_kana = data.get("guest_name_kana", "")
+    kana_parts = name_kana.split() if name_kana else []
+    if len(kana_parts) >= 2:
+        last_name_kana = kana_parts[0]
+        first_name_kana = " ".join(kana_parts[1:])
+    else:
+        last_name_kana = name_kana
+        first_name_kana = ""
+    
+    import secrets
+    import string
+    random_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(12)) + "!A1"
+    
+    member_data = {
+        "last_name": last_name,
+        "first_name": first_name or last_name,
+        "last_name_kana": last_name_kana or None,
+        "first_name_kana": first_name_kana or None,
+        "mail_address": guest_email,
+        "tel": guest_phone,
+        "plain_password": random_password,
+        "gender": data.get("gender", 1),  # フロントエンドから取得、デフォルト1
+        "birthday": data.get("birthday", "2000-01-01"),  # フロントエンドから取得、デフォルト2000-01-01
+        "studio_id": data.get("studio_id", 2),
+        "note": f"Web予約ゲスト（自由枠）: {guest_note}"
+    }
+    
+    try:
+        member_response = client.create_member(member_data)
+        member_id = member_response.get("data", {}).get("member", {}).get("id")
+    except HacomonoAPIError as e:
+        logger.error(f"Failed to create member: {e}")
+        return jsonify({"error": "Failed to create guest member", "message": str(e)}), 400
+    
+    if not member_id:
+        return jsonify({"error": "Failed to create guest member"}), 400
+    
+    logger.info(f"Created member ID: {member_id}")
+    
+    # 2. メンバーにチケットを付与（Web予約用チケット ID:5）
+    try:
+        ticket_response = client.grant_ticket_to_member(member_id, ticket_id=5, num=1)
+        logger.info(f"Granted ticket, member_ticket_id: {ticket_response.get('data', {}).get('member_ticket', {}).get('id')}")
+    except HacomonoAPIError as e:
+        logger.warning(f"Failed to grant ticket: {e}")
+    
+    # 3. 空いているスタッフを取得（指定されていない場合）
+    instructor_ids = data.get("instructor_ids")
+    if not instructor_ids:
+        # 指定された日時の空いているスタッフを取得
+        try:
+            # start_atから日付を抽出
+            start_datetime = datetime.strptime(start_at, "%Y-%m-%d %H:%M:%S.%f")
+            date_str = start_datetime.strftime("%Y-%m-%d")
+            
+            # choice/scheduleから空いているスタッフを取得
+            schedule_response = client.get_choice_schedule(studio_room_id, date_str)
+            schedule = schedule_response.get("data", {}).get("schedule", {})
+            
+            # 利用可能なスタッフを取得
+            shift_instructors = schedule.get("shift_instructor", [])
+            reserved_instructors = schedule.get("reservation_assign_instructor", [])
+            
+            # 予約済みのスタッフIDを取得
+            reserved_instructor_ids = set()
+            for reserved in reserved_instructors:
+                try:
+                    reserved_start_str = reserved.get("start_at", "")
+                    reserved_end_str = reserved.get("end_at", "")
+                    if not reserved_start_str or not reserved_end_str:
+                        continue
+                    # ISO8601形式の日時をパース（タイムゾーン情報を処理）
+                    reserved_start = datetime.fromisoformat(reserved_start_str.replace("Z", "+00:00"))
+                    reserved_end = datetime.fromisoformat(reserved_end_str.replace("Z", "+00:00"))
+                    # 時間が重なっているかチェック
+                    if start_datetime < reserved_end and start_datetime + timedelta(minutes=30) > reserved_start:
+                        reserved_instructor_ids.add(reserved.get("entity_id"))
+                except Exception as e:
+                    logger.warning(f"Failed to parse reserved instructor time: {e}")
+                    continue
+            
+            # 空いているスタッフを抽出
+            available_instructors = []
+            for instructor in shift_instructors:
+                instructor_id = instructor.get("instructor_id")
+                try:
+                    instructor_start_str = instructor.get("start_at", "")
+                    instructor_end_str = instructor.get("end_at", "")
+                    if not instructor_start_str or not instructor_end_str:
+                        continue
+                    instructor_start = datetime.fromisoformat(instructor_start_str.replace("Z", "+00:00"))
+                    instructor_end = datetime.fromisoformat(instructor_end_str.replace("Z", "+00:00"))
+                
+                    # シフト時間内で、予約が入っていないスタッフ
+                    if (instructor_start <= start_datetime < instructor_end and 
+                        instructor_id not in reserved_instructor_ids):
+                        available_instructors.append(instructor_id)
+                except Exception as e:
+                    logger.warning(f"Failed to parse instructor time: {e}")
+                    continue
+            
+            if available_instructors:
+                instructor_ids = available_instructors[:1]  # 最初の1名を使用
+                logger.info(f"Found available instructors: {available_instructors}, using: {instructor_ids}")
+            else:
+                # 空いているスタッフが見つからない場合は、シフトがある最初のスタッフを使用
+                if shift_instructors:
+                    instructor_ids = [shift_instructors[0].get("instructor_id")]
+                    logger.warning(f"No available instructors found, using first shift instructor: {instructor_ids}")
+                else:
+                    instructor_ids = [1]  # フォールバック
+                    logger.warning(f"No shift instructors found, using default: {instructor_ids}")
+        except Exception as e:
+            logger.warning(f"Failed to get available instructors: {e}, using default")
+            instructor_ids = [1]  # エラー時はデフォルト
+    
+    reservation_data = {
+        "member_id": member_id,
+        "studio_room_id": studio_room_id,
+        "program_id": program_id,
+        "ticket_id": 5,  # Web予約チケット
+        "instructor_ids": instructor_ids,
+        "start_at": start_at
+    }
+    
+    # オプションパラメータ
+    if data.get("resource_id_set"):
+        reservation_data["resource_id_set"] = data["resource_id_set"]
+    if data.get("reservation_note"):
+        reservation_data["reservation_note"] = data["reservation_note"]
+    if data.get("is_send_mail") is not None:
+        reservation_data["is_send_mail"] = data["is_send_mail"]
+    
+    try:
+        logger.info(f"Creating choice reservation with data: {reservation_data}")
+        reservation_response = client.create_choice_reservation(reservation_data)
+        reservation = reservation_response.get("data", {}).get("reservation", {})
+        logger.info(f"Choice reservation created: {reservation.get('id')}")
+    except HacomonoAPIError as e:
+        logger.error(f"Failed to create choice reservation: {e}")
+        return jsonify({"error": "Failed to create reservation", "message": str(e)}), 400
+    
+    return jsonify({
+        "success": True,
+        "reservation": {
+            "id": reservation.get("id"),
+            "member_id": member_id,
+            "studio_room_id": studio_room_id,
+            "program_id": program_id,
+            "start_at": reservation.get("start_at"),
+            "end_at": reservation.get("end_at"),
+            "status": reservation.get("status"),
+            "created_at": reservation.get("created_at")
+        },
+        "message": "予約が完了しました"
+    }), 201
+
+
 @app.route("/api/reservations/<int:reservation_id>/cancel", methods=["POST"])
 @handle_errors
 def cancel_reservation(reservation_id: int):
@@ -397,6 +767,74 @@ def cancel_reservation(reservation_id: int):
         "success": True,
         "message": "予約がキャンセルされました"
     })
+
+
+# ==================== 自由枠予約 スケジュール API ====================
+
+@app.route("/api/choice-schedule", methods=["GET"])
+@handle_errors
+def get_choice_schedule():
+    """自由枠予約スケジュールを取得"""
+    client = get_hacomono_client()
+    
+    studio_room_id = request.args.get("studio_room_id", type=int)
+    date = request.args.get("date")  # YYYY-MM-DD
+    
+    if not studio_room_id:
+        return jsonify({"error": "Missing required parameter: studio_room_id"}), 400
+    
+    if not date:
+        date = datetime.now().strftime("%Y-%m-%d")
+    
+    try:
+        response = client.get_choice_schedule(studio_room_id, date)
+        schedule = response.get("data", {}).get("schedule", {})
+        
+        return jsonify({
+            "schedule": {
+                "date": date,
+                "studio_room_service": schedule.get("studio_room_service"),
+                "shift": schedule.get("shift"),
+                "shift_studio_business_hour": schedule.get("shift_studio_business_hour", []),
+                "shift_instructor": schedule.get("shift_instructor", []),
+                "reservation_assign_instructor": schedule.get("reservation_assign_instructor", [])
+            }
+        })
+    except HacomonoAPIError as e:
+        logger.error(f"Failed to get choice schedule: {e}")
+        return jsonify({"error": "Failed to get schedule", "message": str(e)}), 400
+
+
+@app.route("/api/studio-rooms", methods=["GET"])
+@handle_errors
+def get_studio_rooms():
+    """スタジオルーム一覧を取得"""
+    client = get_hacomono_client()
+    
+    studio_id = request.args.get("studio_id", type=int)
+    
+    query = {"is_active": True}
+    if studio_id:
+        query["studio_id"] = studio_id
+    
+    try:
+        response = client.get_studio_rooms(query)
+        rooms = response.get("data", {}).get("studio_rooms", {}).get("list", [])
+        
+        result = []
+        for room in rooms:
+            result.append({
+                "id": room.get("id"),
+                "name": room.get("name"),
+                "code": room.get("code"),
+                "studio_id": room.get("studio_id"),
+                "reservation_type": room.get("reservation_type")  # 1=固定枠, 2=自由枠
+            })
+        
+        return jsonify({"studio_rooms": result})
+    except HacomonoAPIError as e:
+        logger.error(f"Failed to get studio rooms: {e}")
+        return jsonify({"error": "Failed to get studio rooms", "message": str(e)}), 400
 
 
 # ==================== エラーハンドラー ====================

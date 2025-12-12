@@ -22,13 +22,13 @@ COPY . .
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Expose port
-EXPOSE 5000
+# Expose port (configurable via PORT env)
+EXPOSE 5021
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5000/api/health')" || exit 1
+    CMD python -c "import urllib.request; import os; urllib.request.urlopen(f'http://localhost:{os.environ.get(\"PORT\", 5021)}/api/health')" || exit 1
 
-# Run with gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "app:app"]
+# Run with gunicorn (port configurable via PORT env)
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-5021} --workers 2 --timeout 120 --access-logfile - --error-logfile - app:app"]
 

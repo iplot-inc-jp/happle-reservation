@@ -185,29 +185,8 @@ def get_program(program_id: int):
 
 # ==================== スケジュール API ====================
 
-@app.route("/api/schedule", methods=["GET"])
-@handle_errors
-def get_schedule():
-    """レッスンスケジュールを取得"""
-    client = get_hacomono_client()
-    
-    studio_id = request.args.get("studio_id", type=int)
-    program_id = request.args.get("program_id", type=int)
-    start_date = request.args.get("start_date")  # YYYY-MM-DD
-    end_date = request.args.get("end_date")  # YYYY-MM-DD
-    
-    # デフォルトは今日から14日間
-    if not start_date:
-        start_date = datetime.now().strftime("%Y-%m-%d")
-    if not end_date:
-        end_date = (datetime.now() + timedelta(days=14)).strftime("%Y-%m-%d")
-    
-    # hacomono APIはクエリなしで呼び出す（クエリパラメータがエラーを引き起こす）
-    response = client.get_studio_lessons(None)
-    
-    lessons = response.get("data", {}).get("studio_lessons", {}).get("list", [])
-    
-    # 必要な情報のみ抽出（日付フィルタは一時的に無効化 - テスト用）
+def _parse_lessons(lessons, studio_id=None, program_id=None):
+    """レッスンデータを解析して整形"""
     result = []
     for lesson in lessons:
         # studio_idフィルタ
@@ -238,8 +217,79 @@ def get_schedule():
     
     # 日付順でソート
     result.sort(key=lambda x: x.get("start_at", ""))
+    return result
+
+
+@app.route("/api/schedule/all", methods=["GET"])
+@handle_errors
+def get_schedule_all():
+    """全レッスンスケジュールを取得（フィルタリングなし - テスト用）"""
+    client = get_hacomono_client()
     
-    return jsonify({"schedule": result})
+    studio_id = request.args.get("studio_id", type=int)
+    program_id = request.args.get("program_id", type=int)
+    
+    response = client.get_studio_lessons(None)
+    lessons = response.get("data", {}).get("studio_lessons", {}).get("list", [])
+    
+    result = _parse_lessons(lessons, studio_id, program_id)
+    
+    return jsonify({
+        "schedule": result,
+        "total_count": len(result),
+        "note": "フィルタリングなし - 全期間のデータを返します"
+    })
+
+
+@app.route("/api/schedule", methods=["GET"])
+@handle_errors
+def get_schedule():
+    """レッスンスケジュールを取得（日付フィルタリングあり）"""
+    client = get_hacomono_client()
+    
+    studio_id = request.args.get("studio_id", type=int)
+    program_id = request.args.get("program_id", type=int)
+    start_date = request.args.get("start_date")  # YYYY-MM-DD
+    end_date = request.args.get("end_date")  # YYYY-MM-DD
+    
+    # デフォルトは今日から14日間
+    if not start_date:
+        start_date = datetime.now().strftime("%Y-%m-%d")
+    if not end_date:
+        end_date = (datetime.now() + timedelta(days=14)).strftime("%Y-%m-%d")
+    
+    response = client.get_studio_lessons(None)
+    lessons = response.get("data", {}).get("studio_lessons", {}).get("list", [])
+    
+    # 日付フィルタリング
+    from datetime import datetime as dt
+    start_dt = dt.strptime(start_date, "%Y-%m-%d")
+    end_dt = dt.strptime(end_date, "%Y-%m-%d")
+    
+    filtered_lessons = []
+    for lesson in lessons:
+        lesson_start = lesson.get("start_at", "")
+        if lesson_start:
+            try:
+                # タイムゾーン部分を除去してパース
+                lesson_dt = dt.fromisoformat(lesson_start.replace("+09:00", "").replace("Z", ""))
+                if start_dt <= lesson_dt <= end_dt + timedelta(days=1):
+                    filtered_lessons.append(lesson)
+            except Exception as e:
+                logger.warning(f"Date parse error: {e}")
+                continue
+    
+    result = _parse_lessons(filtered_lessons, studio_id, program_id)
+    
+    return jsonify({
+        "schedule": result,
+        "filter": {
+            "start_date": start_date,
+            "end_date": end_date,
+            "studio_id": studio_id,
+            "program_id": program_id
+        }
+    })
 
 
 # ==================== 予約 API ====================

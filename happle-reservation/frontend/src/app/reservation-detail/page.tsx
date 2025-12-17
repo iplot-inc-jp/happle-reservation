@@ -30,18 +30,21 @@ function ReservationDetailContent() {
       
       try {
         setLoading(true)
-        const data = await getReservationDetail(
+        const result = await getReservationDetail(
           parseInt(reservationId),
           parseInt(memberId),
           verifyHash
         )
-        if (data) {
-          setDetail(data)
+        if (result.data) {
+          setDetail(result.data)
+        } else if (result.error) {
+          // APIからのエラーメッセージを使用
+          setError(result.message || result.error)
         } else {
-          setError('予約が見つからないか、認証に失敗しました')
+          setError('予約情報が見つかりませんでした')
         }
       } catch (err) {
-        setError('予約情報の取得に失敗しました')
+        setError('予約情報の取得中にエラーが発生しました')
         console.error(err)
       } finally {
         setLoading(false)
@@ -65,13 +68,13 @@ function ReservationDetailContent() {
         setCancelSuccess(true)
         setShowCancelConfirm(false)
         // 予約情報を再取得
-        const data = await getReservationDetail(
+        const refreshResult = await getReservationDetail(
           parseInt(reservationId),
           parseInt(memberId),
           verifyHash
         )
-        if (data) {
-          setDetail(data)
+        if (refreshResult.data) {
+          setDetail(refreshResult.data)
         }
       } else {
         alert(result.error || 'キャンセルに失敗しました')

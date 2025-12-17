@@ -285,16 +285,16 @@ export async function getReservationDetail(
   reservationId: number,
   memberId: number,
   verify: string
-): Promise<ReservationDetail | null> {
+): Promise<{ data?: ReservationDetail; error?: string; message?: string }> {
   const params = new URLSearchParams({
     member_id: memberId.toString(),
     verify: verify
   })
   const response = await fetchApi<ReservationDetail>(`/api/reservations/${reservationId}?${params.toString()}`)
-  if (response.error || !response.data) {
-    return null
+  if (response.error) {
+    return { error: response.error, message: response.message }
   }
-  return response.data
+  return { data: response.data }
 }
 
 export async function cancelReservation(

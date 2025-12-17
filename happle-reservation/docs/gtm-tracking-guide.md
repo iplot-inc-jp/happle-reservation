@@ -1,5 +1,34 @@
 # GTM計測機能 設計ガイド
 
+## ファネル分析対応イベント一覧
+
+| ステップ | イベント名 | タイミング | 主なデータ |
+|----------|-----------|-----------|-----------|
+| 1. 訪問 | (自動) page_view | ページ表示時 | URL |
+| 2. メニュー選択 | `menu_select` | メニュークリック時 | program_id, program_name |
+| 3. 日時選択 | `slot_select` | 時間枠クリック時 | slot_date, slot_time |
+| 4. 情報入力開始 | `form_start` | 入力画面表示時 | program_id, slot_date |
+| 5. 情報入力完了 | `form_submit` | 確認ボタンクリック時 | program_id, slot_date |
+| 6. 予約完了 | `reservation_complete` | 予約完了時 | reservation_id, 全情報 |
+
+### ファネル分析例（GA4）
+
+```
+訪問: 1000人 (100%)
+  ↓
+メニュー選択: 600人 (60%) ← 40%離脱
+  ↓
+日時選択: 400人 (40%) ← 20%離脱
+  ↓
+情報入力開始: 350人 (35%) ← 5%離脱
+  ↓
+情報入力完了: 300人 (30%) ← 5%離脱
+  ↓
+予約完了: 200人 (20%) ← 10%離脱
+```
+
+---
+
 ## 元の要望と実装状況
 
 ### 要望1: GTMタグを全ページに設置（後から一括反映）
@@ -192,6 +221,90 @@ DataLayerの値を使用するには、GTMで変数を作成します。
 | トップ | https://happle-reservation-frontend.onrender.com/ |
 | リンク生成（管理画面） | https://happle-reservation-frontend.onrender.com/admin/link-generator |
 | 予約確認 | https://happle-reservation-frontend.onrender.com/reservation-detail?reservation_id=XXX |
+
+---
+
+## イベント詳細
+
+### menu_select（メニュー選択）
+
+```javascript
+{
+  event: 'menu_select',
+  program_id: 3,
+  program_name: '【初回】骨膜リリースエステ',
+  studio_id: 2,
+  utm_source: 'google',
+  utm_medium: 'cpc',
+  utm_campaign: 'summer_sale'
+}
+```
+
+### slot_select（日時選択）
+
+```javascript
+{
+  event: 'slot_select',
+  slot_id: 123,                    // 固定枠の場合
+  reservation_type: 'free',       // 自由枠の場合
+  program_id: 3,
+  program_name: '【初回】骨膜リリースエステ',
+  studio_id: 2,
+  slot_date: '2025-12-30',
+  slot_time: '15:15',
+  available_count: 5              // 固定枠の場合
+}
+```
+
+### form_start（フォーム表示）
+
+```javascript
+{
+  event: 'form_start',
+  slot_id: 123,                    // 固定枠の場合
+  studio_room_id: 456,            // 自由枠の場合
+  program_id: 3,
+  program_name: '【初回】骨膜リリースエステ',
+  studio_id: 2,
+  slot_date: '2025-12-30',
+  slot_time: '15:15'
+}
+```
+
+### form_submit（フォーム送信）
+
+```javascript
+{
+  event: 'form_submit',
+  slot_id: 123,
+  program_id: 3,
+  program_name: '【初回】骨膜リリースエステ',
+  studio_id: 2
+}
+```
+
+### reservation_complete（予約完了）
+
+```javascript
+{
+  event: 'reservation_complete',
+  reservation_id: '1234',
+  studio_id: '2',
+  studio_code: 'asmy_kumamoto',
+  studio_name: 'ASMY熊本店',
+  program_id: '3',
+  program_name: '【初回】骨膜リリースエステ',
+  reservation_date: '2025-12-30',
+  reservation_time: '15:15',
+  duration: '90',
+  price: '2980',
+  customer_name: 'テスト',
+  customer_email: 'test@example.com',
+  utm_source: 'google',
+  utm_medium: 'cpc',
+  utm_campaign: 'summer_sale'
+}
+```
 
 ---
 

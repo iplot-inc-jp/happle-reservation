@@ -2,6 +2,7 @@
 
 import { useEffect, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { sendGTMEvent } from '@next/third-parties/google'
 import { getChoiceSchedule, getStudios, getPrograms, getStudioRooms, ChoiceSchedule, Studio, Program, StudioRoom } from '@/lib/api'
 import { format, addDays, startOfWeek, subWeeks, addWeeks, parseISO, isSameDay } from 'date-fns'
 import { ja } from 'date-fns/locale'
@@ -220,6 +221,18 @@ function FreeScheduleContent() {
 
   const handleSlotSelect = (slot: GridSlot) => {
     if (!slot.available) return
+
+    // GTMイベント: 自由枠日時選択
+    sendGTMEvent({
+      event: 'slot_select',
+      reservation_type: 'free',
+      studio_id: selectedStudio?.id,
+      studio_name: selectedStudio?.name || '',
+      program_id: selectedProgram?.id,
+      program_name: selectedProgram?.name || '',
+      slot_date: format(slot.date, 'yyyy-MM-dd'),
+      slot_time: slot.time,
+    })
 
     const params = new URLSearchParams()
     params.set('studio_room_id', studioRoomId!.toString())

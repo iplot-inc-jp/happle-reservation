@@ -2,6 +2,7 @@
 
 import { useEffect, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { sendGTMEvent } from '@next/third-parties/google'
 import { getSchedule, getProgram, ScheduleSlot, Program } from '@/lib/api'
 import { format, parseISO, addDays, startOfDay, isSameDay } from 'date-fns'
 import { ja } from 'date-fns/locale'
@@ -55,6 +56,18 @@ function ScheduleContent() {
 
   const handleSlotSelect = (slot: ScheduleSlot) => {
     if (!slot.is_reservable || slot.available <= 0) return
+    
+    // GTMイベント: 日時選択
+    sendGTMEvent({
+      event: 'slot_select',
+      slot_id: slot.id,
+      program_id: programId,
+      program_name: program?.name || '',
+      studio_id: studioId,
+      slot_date: format(parseISO(slot.start_at), 'yyyy-MM-dd'),
+      slot_time: format(parseISO(slot.start_at), 'HH:mm'),
+      available_count: slot.available,
+    })
     
     const params = new URLSearchParams()
     params.set('slot_id', slot.id.toString())

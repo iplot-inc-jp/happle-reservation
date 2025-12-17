@@ -1,7 +1,8 @@
 'use client'
 
-import { useEffect, useState, Suspense } from 'react'
+import { useEffect, useState, Suspense, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { sendGTMEvent } from '@next/third-parties/google'
 import { createChoiceReservation, getPrograms, Program } from '@/lib/api'
 import { format, parse } from 'date-fns'
 import { ja } from 'date-fns/locale'
@@ -80,6 +81,24 @@ function FreeBookingContent() {
     loadData()
   }, [studioRoomId, startAt, studioId])
 
+  // GTMイベント: フォーム表示
+  const formStartSent = useRef(false)
+  useEffect(() => {
+    if (!loading && !formStartSent.current && studioRoomId && startAt) {
+      formStartSent.current = true
+      sendGTMEvent({
+        event: 'form_start',
+        reservation_type: 'free',
+        studio_room_id: studioRoomId,
+        studio_id: studioId,
+        program_id: selectedProgram?.id,
+        program_name: selectedProgram?.name || '',
+        slot_date: displayDateStr,
+        slot_time: displayTimeStr,
+      })
+    }
+  }, [loading, studioRoomId, startAt, studioId, selectedProgram, displayDateStr, displayTimeStr])
+
   const validateForm = (): boolean => {
     const errors: FormErrors = {}
     
@@ -125,6 +144,18 @@ function FreeBookingContent() {
   // 予約確定
   const handleSubmit = async () => {
     if (!selectedProgram || !studioRoomId || !startAt) return
+    
+    // GTMイベント: フォーム送信
+    sendGTMEvent({
+      event: 'form_submit',
+      reservation_type: 'free',
+      studio_room_id: studioRoomId,
+      studio_id: studioId,
+      program_id: selectedProgram.id,
+      program_name: selectedProgram.name,
+      slot_date: displayDateStr,
+      slot_time: displayTimeStr,
+    })
     
     setSubmitting(true)
     setError(null)

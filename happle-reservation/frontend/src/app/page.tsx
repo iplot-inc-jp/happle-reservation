@@ -2,6 +2,7 @@
 
 import { useEffect, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { sendGTMEvent } from '@next/third-parties/google'
 import { getPrograms, getStudios, Program, Studio } from '@/lib/api'
 
 type ReservationType = 'fixed' | 'free' | null
@@ -103,6 +104,18 @@ function HomeContent() {
   }
 
   const handleProgramSelect = (programId: number) => {
+    // GTMイベント: メニュー選択
+    const selectedProgram = programs.find(p => p.id === programId)
+    sendGTMEvent({
+      event: 'menu_select',
+      program_id: programId,
+      program_name: selectedProgram?.name || '',
+      studio_id: selectedStudio,
+      utm_source: utmSource,
+      utm_medium: utmMedium,
+      utm_campaign: utmCampaign,
+    })
+    
     const params = buildUrlParams({
       program_id: programId,
       studio_id: selectedStudio
@@ -111,6 +124,15 @@ function HomeContent() {
   }
 
   const handleFreeReservation = () => {
+    // GTMイベント: 自由枠予約開始
+    sendGTMEvent({
+      event: 'free_reservation_start',
+      studio_id: selectedStudio,
+      utm_source: utmSource,
+      utm_medium: utmMedium,
+      utm_campaign: utmCampaign,
+    })
+    
     const params = buildUrlParams({
       studio_id: selectedStudio
     })
@@ -121,6 +143,17 @@ function HomeContent() {
   // 固定メニューがある場合は直接スケジュールページへ遷移するボタン
   const handleFixedProgramContinue = () => {
     if (fixedProgram) {
+      // GTMイベント: 固定メニュー選択
+      sendGTMEvent({
+        event: 'menu_select',
+        program_id: fixedProgram.id,
+        program_name: fixedProgram.name,
+        studio_id: fixedStudio?.id,
+        is_fixed: true,
+        utm_source: utmSource,
+        utm_medium: utmMedium,
+        utm_campaign: utmCampaign,
+      })
       handleProgramSelect(fixedProgram.id)
     }
   }

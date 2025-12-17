@@ -1,7 +1,8 @@
 'use client'
 
-import { useEffect, useState, Suspense } from 'react'
+import { useEffect, useState, Suspense, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { sendGTMEvent } from '@next/third-parties/google'
 import { getProgram, getSchedule, createReservation, Program, ScheduleSlot } from '@/lib/api'
 import { format, parseISO } from 'date-fns'
 import { ja } from 'date-fns/locale'
@@ -77,6 +78,23 @@ function BookingContent() {
     loadData()
   }, [slotId, programId, studioId])
 
+  // GTMイベント: フォーム表示
+  const formStartSent = useRef(false)
+  useEffect(() => {
+    if (!loading && slot && program && !formStartSent.current) {
+      formStartSent.current = true
+      sendGTMEvent({
+        event: 'form_start',
+        slot_id: slot.id,
+        program_id: program.id,
+        program_name: program.name,
+        studio_id: studioId,
+        slot_date: format(parseISO(slot.start_at), 'yyyy-MM-dd'),
+        slot_time: format(parseISO(slot.start_at), 'HH:mm'),
+      })
+    }
+  }, [loading, slot, program, studioId])
+
   const validateForm = (): boolean => {
     const errors: FormErrors = {}
     
@@ -104,6 +122,15 @@ function BookingContent() {
     e.preventDefault()
     
     if (!validateForm() || !slot) return
+    
+    // GTMイベント: フォーム送信
+    sendGTMEvent({
+      event: 'form_submit',
+      slot_id: slot.id,
+      program_id: program?.id,
+      program_name: program?.name || '',
+      studio_id: studioId,
+    })
     
     setSubmitting(true)
     setError(null)

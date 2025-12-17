@@ -5,13 +5,6 @@ import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { sendGTMEvent } from '@next/third-parties/google'
 
-// DataLayer用の型定義
-declare global {
-  interface Window {
-    dataLayer?: Record<string, unknown>[]
-  }
-}
-
 function CompleteContent() {
   const searchParams = useSearchParams()
   
@@ -39,7 +32,8 @@ function CompleteContent() {
   // GTM DataLayer push - 予約完了イベント
   useEffect(() => {
     // @next/third-partiesのsendGTMEventを使用
-    sendGTMEvent({
+    // GTMにイベントを送信
+    const eventData = {
       event: 'reservation_complete',
       reservation_id: reservationId,
       studio_id: studioId,
@@ -56,38 +50,12 @@ function CompleteContent() {
       utm_source: utmSource,
       utm_medium: utmMedium,
       utm_campaign: utmCampaign,
-    })
-    
-    // フォールバック: window.dataLayerに直接push（GTM IDが未設定の場合も動作確認可能）
-    if (typeof window !== 'undefined') {
-      window.dataLayer = window.dataLayer || []
-      window.dataLayer.push({
-        event: 'reservation_complete',
-        reservation_id: reservationId,
-        studio_id: studioId,
-        studio_code: studioCode,
-        studio_name: studioName,
-        program_id: programId,
-        program_name: programName,
-        reservation_date: reservationDate,
-        reservation_time: reservationTime,
-        duration: duration,
-        price: price,
-        customer_name: name,
-        customer_email: email,
-        utm_source: utmSource,
-        utm_medium: utmMedium,
-        utm_campaign: utmCampaign,
-      })
-      
-      // デバッグ用ログ
-      console.log('[GTM] reservation_complete event pushed:', {
-        reservation_id: reservationId,
-        studio_id: studioId,
-        studio_code: studioCode,
-        program_id: programId,
-      })
     }
+    
+    sendGTMEvent(eventData)
+    
+    // デバッグ用ログ
+    console.log('[GTM] reservation_complete event pushed:', eventData)
   }, [reservationId, studioId, studioCode, studioName, programId, programName, 
       reservationDate, reservationTime, duration, price, name, email,
       utmSource, utmMedium, utmCampaign])

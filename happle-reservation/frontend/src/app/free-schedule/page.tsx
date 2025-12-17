@@ -27,6 +27,9 @@ function FreeScheduleContent() {
   const utmMedium = searchParams.get('utm_medium')
   const utmCampaign = searchParams.get('utm_campaign')
 
+  // URLパラメータがある場合は初期化完了まで待つ
+  const hasUrlParams = !!(initialStudioId && initialProgramId)
+  
   // State for Selection Flow
   const [studios, setStudios] = useState<Studio[]>([])
   const [selectedStudio, setSelectedStudio] = useState<Studio | null>(null)
@@ -40,6 +43,7 @@ function FreeScheduleContent() {
   const [currentWeekStart, setCurrentWeekStart] = useState<Date>(() => startOfWeek(new Date(), { weekStartsOn: 1 }))
   const [weeklySchedules, setWeeklySchedules] = useState<(ChoiceSchedule | null)[]>([])
   const [loading, setLoading] = useState(true)
+  const [initializing, setInitializing] = useState(hasUrlParams) // URLパラメータからの初期化中
   const [scheduleLoading, setScheduleLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -56,13 +60,20 @@ function FreeScheduleContent() {
         // Initial Selection Logic
         if (initialStudioId) {
             const initial = data.find(s => s.id === parseInt(initialStudioId))
-            if (initial) handleStudioSelect(initial)
+            if (initial) {
+              await handleStudioSelect(initial, true) // URLからの初期化
+            } else {
+              setInitializing(false)
+            }
         } else if (data.length === 1) {
             handleStudioSelect(data[0])
+        } else {
+            setInitializing(false)
         }
       } catch (err) {
         console.error(err)
         setError('店舗情報の読み込みに失敗しました')
+        setInitializing(false)
       } finally {
         setLoading(false)
       }
@@ -71,11 +82,13 @@ function FreeScheduleContent() {
   }, [])
 
   // 2. Handle Studio Selection -> Load Programs & Find Room
-  const handleStudioSelect = async (studio: Studio) => {
+  const handleStudioSelect = async (studio: Studio, isFromUrl: boolean = false) => {
     setSelectedStudio(studio)
-    setSelectedProgram(null)
-    setStudioRoomId(null)
-    setWeeklySchedules([])
+    if (!isFromUrl) {
+      setSelectedProgram(null)
+      setStudioRoomId(null)
+      setWeeklySchedules([])
+    }
     
     try {
         // Load Programs
@@ -111,6 +124,11 @@ function FreeScheduleContent() {
     } catch (err) {
         console.error(err)
         setError('メニューの読み込みに失敗しました')
+    } finally {
+        // URLからの初期化が完了したらフラグをオフに
+        if (isFromUrl) {
+          setInitializing(false)
+        }
     }
   }
 
@@ -265,10 +283,16 @@ function FreeScheduleContent() {
   const handlePrevWeek = () => setCurrentWeekStart(subWeeks(currentWeekStart, 1))
   const handleNextWeek = () => setCurrentWeekStart(addWeeks(currentWeekStart, 1))
 
-  if (loading) {
+  // URLパラメータからの初期化中、または店舗データローディング中
+  if (loading || initializing) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
-        <div className="w-12 h-12 border-4 border-primary-200 border-t-primary-500 rounded-full animate-spin"></div>
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-primary-200 border-t-primary-500 rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-accent-600">
+            {initializing ? 'スケジュールを読み込み中...' : '読み込み中...'}
+          </p>
+        </div>
       </div>
     )
   }

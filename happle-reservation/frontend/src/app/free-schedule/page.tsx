@@ -299,40 +299,54 @@ function FreeScheduleContent() {
             {/* Studio Selection */}
             <div>
                 <label className="block text-sm font-bold text-gray-700 mb-2">ご希望の店舗 <span className="text-red-500">*</span></label>
-                <select 
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                    value={selectedStudio?.id || ''}
-                    onChange={(e) => {
-                        const studio = studios.find(s => s.id === parseInt(e.target.value))
-                        if (studio) handleStudioSelect(studio)
-                    }}
-                >
-                    <option value="">店舗を選択してください</option>
-                    {studios.map(studio => (
-                        <option key={studio.id} value={studio.id}>{studio.name}</option>
-                    ))}
-                </select>
+                {initialStudioId && selectedStudio ? (
+                  // URLパラメータで指定されている場合は固定表示
+                  <div className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-700 font-medium">
+                    {selectedStudio.name}
+                  </div>
+                ) : (
+                  <select 
+                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                      value={selectedStudio?.id || ''}
+                      onChange={(e) => {
+                          const studio = studios.find(s => s.id === parseInt(e.target.value))
+                          if (studio) handleStudioSelect(studio)
+                      }}
+                  >
+                      <option value="">店舗を選択してください</option>
+                      {studios.map(studio => (
+                          <option key={studio.id} value={studio.id}>{studio.name}</option>
+                      ))}
+                  </select>
+                )}
             </div>
 
             {/* Program Selection */}
             <div>
                 <label className="block text-sm font-bold text-gray-700 mb-2">ご希望のコース <span className="text-red-500">*</span></label>
-                <select 
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100 disabled:text-gray-400"
-                    value={selectedProgram?.id || ''}
-                    onChange={(e) => {
-                        const program = programs.find(p => p.id === parseInt(e.target.value))
-                        if (program) handleProgramSelect(program)
-                    }}
-                    disabled={!selectedStudio}
-                >
-                    <option value="">コースを選択してください</option>
-                    {programs.map(program => (
-                        <option key={program.id} value={program.id}>
-                            {program.name} ({program.duration}分 / ¥{program.price?.toLocaleString()})
-                        </option>
-                    ))}
-                </select>
+                {initialProgramId && selectedProgram ? (
+                  // URLパラメータで指定されている場合は固定表示
+                  <div className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg text-gray-700 font-medium">
+                    {selectedProgram.name} ({selectedProgram.duration}分 / ¥{selectedProgram.price?.toLocaleString()})
+                  </div>
+                ) : (
+                  <select 
+                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 disabled:bg-gray-100 disabled:text-gray-400"
+                      value={selectedProgram?.id || ''}
+                      onChange={(e) => {
+                          const program = programs.find(p => p.id === parseInt(e.target.value))
+                          if (program) handleProgramSelect(program)
+                      }}
+                      disabled={!selectedStudio}
+                  >
+                      <option value="">コースを選択してください</option>
+                      {programs.map(program => (
+                          <option key={program.id} value={program.id}>
+                              {program.name} ({program.duration}分 / ¥{program.price?.toLocaleString()})
+                          </option>
+                      ))}
+                  </select>
+                )}
             </div>
         </div>
       </div>

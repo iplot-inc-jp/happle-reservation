@@ -272,12 +272,12 @@ if (staffOnShift.length === 0) {
 const isAssociated = (instructorId: number): boolean => {
   const studioIds = instructorStudioMap[instructorId]
   
-  // 空配列 = どのスタジオにも紐付けなし = 予約不可
+  // hacomonoのロジック: 空配列 = 制限なし = 全店舗対応可能
   if (!studioIds || studioIds.length === 0) {
-    return false
+    return true  // 全店舗OK
   }
   
-  // 現在のスタジオIDが含まれているか
+  // 特定のスタジオに紐付けられている場合、現在のスタジオが含まれているか
   return studioIds.includes(currentStudioId)
 }
 
@@ -287,6 +287,9 @@ if (associatedStaff.length === 0) {
   return { available: false, reason: 'no_associated_staff' }
 }
 ```
+
+> **重要**: hacomonoでは`studio_ids=[]`（空配列）は「制限なし＝全店舗対応可能」を意味します。
+> 特定のスタジオに限定する場合のみ`studio_ids=[1, 2]`のように指定します。
 
 **表示**: `×` (赤)
 

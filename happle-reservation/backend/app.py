@@ -1592,15 +1592,13 @@ def create_choice_reservation():
                 instructor_id = instructor.get("instructor_id")
                 try:
                     # スタッフがスタジオに紐付けられているかチェック
+                    # hacomonoのロジック: studio_idsが空 = 全店舗対応可能
                     instructor_studio_ids = instructor_studio_map.get(instructor_id, [])
-                    if instructor_studio_ids is not None and len(instructor_studio_ids) == 0:
-                        # studio_idsが空の場合はこのスタジオでは予約不可
-                        logger.debug(f"Instructor {instructor_id} has empty studio_ids, skipping")
-                        continue
                     if instructor_studio_ids and studio_id and studio_id not in instructor_studio_ids:
                         # 特定のスタジオに紐付けられているが、このスタジオではない
                         logger.debug(f"Instructor {instructor_id} not associated with studio {studio_id}, skipping")
                         continue
+                    # 空配列の場合は制限なし（全店舗OK）なのでスキップしない
                     
                     instructor_start_str = instructor.get("start_at", "")
                     instructor_end_str = instructor.get("end_at", "")

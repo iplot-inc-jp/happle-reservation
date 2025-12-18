@@ -205,9 +205,9 @@ function FreeScheduleContent() {
     // JSONではキーが文字列になるため、文字列に変換してアクセス
     const instructorStudioIds = instructorStudioMap[String(instructorId)]
     
-    // studio_idsが未設定または空の場合は「どのスタジオにも紐付けられていない」=予約不可
+    // hacomonoのロジック: studio_idsが未設定または空の場合は「全店舗対応可能」
     if (!instructorStudioIds || instructorStudioIds.length === 0) {
-      return false
+      return true  // 空配列 = 制限なし = 全店舗OK
     }
     
     // 特定のスタジオに紐付けられている場合は、そのスタジオに含まれているかチェック

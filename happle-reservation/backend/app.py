@@ -37,7 +37,11 @@ app = Flask(__name__)
 app.json.ensure_ascii = False  # 日本語をUnicodeエスケープしない
 
 # CORS設定
-CORS(app, origins=os.environ.get("CORS_ORIGINS", "*").split(","))
+CORS(app, 
+     origins=os.environ.get("CORS_ORIGINS", "*").split(","),
+     supports_credentials=True,
+     allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 
 # hacomono クライアント（遅延初期化）
 _hacomono_client = None

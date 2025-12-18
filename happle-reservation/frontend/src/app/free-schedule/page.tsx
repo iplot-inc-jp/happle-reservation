@@ -153,14 +153,28 @@ function FreeScheduleContent() {
   useEffect(() => {
     if (!studioRoomId || !selectedProgram) return
 
+    // このeffectが実行される時点のweekDatesをキャプチャ
+    const datesToLoad = Array.from({ length: 7 }, (_, i) => addDays(currentWeekStart, i))
+
     async function loadWeeklySchedule() {
       try {
         setScheduleLoading(true)
-        const promises = weekDates.map(date => 
+        const promises = datesToLoad.map(date => 
           getChoiceSchedule(studioRoomId!, format(date, 'yyyy-MM-dd'))
         )
         const results = await Promise.all(promises)
-        setWeeklySchedules(results)
+        
+        // 日付→スケジュールのマップを作成
+        const scheduleMap = new Map<string, ChoiceSchedule | null>()
+        datesToLoad.forEach((date, index) => {
+          scheduleMap.set(format(date, 'yyyy-MM-dd'), results[index])
+        })
+        
+        // weekDatesの順序でスケジュール配列を再構築
+        const orderedSchedules = datesToLoad.map(date => 
+          scheduleMap.get(format(date, 'yyyy-MM-dd')) || null
+        )
+        setWeeklySchedules(orderedSchedules)
       } catch (err) {
         console.error(err)
         // Don't set global error to avoid blocking UI, just show empty calendar
@@ -184,11 +198,13 @@ function FreeScheduleContent() {
     
     // JSONではキーが文字列になるため、文字列に変換してアクセス
     const instructorStudioIds = instructorStudioMap[String(instructorId)]
+    
+    // studio_idsが未設定または空の場合は「制限なし」=全スタジオで利用可能
     if (!instructorStudioIds || instructorStudioIds.length === 0) {
-      // スタッフがどのスタジオにも紐付けられていない場合は予約不可
-      return false
+      return true
     }
     
+    // 特定のスタジオに紐付けられている場合は、そのスタジオに含まれているかチェック
     return instructorStudioIds.includes(studioId)
   }
 

@@ -30,7 +30,7 @@ function CompleteContent() {
   const utmSource = searchParams.get('utm_source')
   const utmMedium = searchParams.get('utm_medium')
   const utmCampaign = searchParams.get('utm_campaign')
-  
+
   // LINE公式アカウントURL
   const lineUrl = searchParams.get('line_url')
   

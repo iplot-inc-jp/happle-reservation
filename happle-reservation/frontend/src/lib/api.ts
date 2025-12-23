@@ -119,24 +119,26 @@ export interface Program {
 }
 
 /**
- * プログラムに選択可能なスタッフがいるかどうかをチェック
- * - selectable_instructor_details が未設定または空 → 全スタッフ選択可能 → true
- * - type === 'ALL' or 'RANDOM_ALL' → 全スタッフ選択可能 → true
- * - type === 'SELECTED' / 'FIXED' / 'RANDOM_SELECTED' かつ items.length > 0 → 特定のスタッフが選択可能 → true
- * - type === 'SELECTED' / 'FIXED' / 'RANDOM_SELECTED' かつ items.length === 0 → スタッフなし → false
+ * プログラムに明示的に紐づいたスタッフがいるかどうかをチェック
+ * 
+ * 【重要】スタッフが明示的に紐づいていないプログラムは選択不可
+ * - selectable_instructor_details が未設定または空 → false（スタッフ未設定）
+ * - type === 'ALL' or 'RANDOM_ALL' → false（明示的に紐づいていない）
+ * - type === 'SELECTED' / 'FIXED' / 'RANDOM_SELECTED' かつ items.length > 0 → true（明示的に紐づいている）
+ * - type === 'SELECTED' / 'FIXED' / 'RANDOM_SELECTED' かつ items.length === 0 → false（スタッフなし）
  */
 export function hasSelectableInstructors(program: Program): boolean {
   const details = program.selectable_instructor_details
   if (!details || details.length === 0) {
-    // 設定なし = 全スタッフ選択可能
-    return true
+    // 設定なし = スタッフが紐づいていない → 選択不可
+    return false
   }
   
   // 最初の設定を使用（通常は1つのみ）
   const detail = details[0]
   if (detail.type === 'ALL' || detail.type === 'RANDOM_ALL') {
-    // 全スタッフ選択可能
-    return true
+    // 全スタッフから選択 = 明示的に紐づいていない → 選択不可
+    return false
   }
   
   if (detail.type === 'SELECTED' || detail.type === 'FIXED' || detail.type === 'RANDOM_SELECTED') {
@@ -144,7 +146,48 @@ export function hasSelectableInstructors(program: Program): boolean {
     return (detail.items?.length ?? 0) > 0
   }
   
+  return false
+}
+
+/**
+ * プログラムに明示的に紐づいた設備があるかどうかをチェック
+ * 
+ * 【重要】設備が明示的に紐づいていないプログラムは選択不可
+ * - selectable_resource_details が未設定または空 → false（設備未設定）
+ * - type === 'ALL' or 'RANDOM_ALL' → false（明示的に紐づいていない）
+ * - type === 'SELECTED' / 'FIXED' / 'RANDOM_SELECTED' かつ items.length > 0 → true（明示的に紐づいている）
+ * - type === 'SELECTED' / 'FIXED' / 'RANDOM_SELECTED' かつ items.length === 0 → false（設備なし）
+ */
+export function hasSelectableResources(program: Program): boolean {
+  const details = program.selectable_resource_details
+  if (!details || details.length === 0) {
+    // 設定なし = 設備が紐づいていない → 選択不可
+    return false
+  }
+  
+  // 全ての設定で少なくとも1つの設備が紐づいているかチェック
+  for (const detail of details) {
+    if (detail.type === 'ALL' || detail.type === 'RANDOM_ALL') {
+      // 全設備から選択 = 明示的に紐づいていない → 選択不可
+      return false
+    }
+    
+    if (detail.type === 'SELECTED' || detail.type === 'FIXED' || detail.type === 'RANDOM_SELECTED') {
+      // 特定設備のみ: itemsに1つ以上の設備がなければ選択不可
+      if ((detail.items?.length ?? 0) === 0) {
+        return false
+      }
+    }
+  }
+  
   return true
+}
+
+/**
+ * プログラムがスタッフと設備の両方に紐づいているかチェック
+ */
+export function isProgramFullyConfigured(program: Program): boolean {
+  return hasSelectableInstructors(program) && hasSelectableResources(program)
 }
 
 /**
@@ -386,27 +429,41 @@ export async function getStudio(studioId: number): Promise<Studio | null> {
 
 export interface GetProgramsOptions {
   studioId?: number
-  filterBySelectableInstructors?: boolean  // 選択可能スタッフがいるプログラムのみ取得
+  filterBySelectableInstructors?: boolean  // 選択可能スタッフがいるプログラムのみ取得（非推奨：filterFullyConfigured を使用）
+  filterBySelectableResources?: boolean    // 選択可能設備があるプログラムのみ取得（非推奨：filterFullyConfigured を使用）
+  filterFullyConfigured?: boolean          // スタッフと設備の両方が紐づいているプログラムのみ取得
 }
 
 export async function getPrograms(studioIdOrOptions?: number | GetProgramsOptions): Promise<Program[]> {
   let studioId: number | undefined
   let filterBySelectableInstructors = false
+  let filterBySelectableResources = false
+  let filterFullyConfigured = false
   
   if (typeof studioIdOrOptions === 'number') {
     studioId = studioIdOrOptions
   } else if (studioIdOrOptions) {
     studioId = studioIdOrOptions.studioId
     filterBySelectableInstructors = studioIdOrOptions.filterBySelectableInstructors ?? false
+    filterBySelectableResources = studioIdOrOptions.filterBySelectableResources ?? false
+    filterFullyConfigured = studioIdOrOptions.filterFullyConfigured ?? false
   }
   
   const params = studioId ? `?studio_id=${studioId}` : ''
   const response = await fetchApi<{ programs: Program[] }>(`/api/programs${params}`)
   let programs = response.data?.programs || []
   
-  // 選択可能スタッフがいるプログラムのみにフィルタリング
-  if (filterBySelectableInstructors) {
-    programs = programs.filter(hasSelectableInstructors)
+  // スタッフと設備の両方が紐づいているプログラムのみにフィルタリング
+  if (filterFullyConfigured) {
+    programs = programs.filter(isProgramFullyConfigured)
+  } else {
+    // 個別フィルタリング（後方互換性のため）
+    if (filterBySelectableInstructors) {
+      programs = programs.filter(hasSelectableInstructors)
+    }
+    if (filterBySelectableResources) {
+      programs = programs.filter(hasSelectableResources)
+    }
   }
   
   return programs

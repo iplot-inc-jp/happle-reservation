@@ -6,6 +6,45 @@
 1. **予約選択画面（フロントエンド）**: カレンダー表示時の○×判定
 2. **予約実行時（バックエンド）**: 実際に予約を作成する時のスタッフ選択
 
+---
+
+## プログラム（メニュー）の表示条件
+
+プログラムがメニュー一覧に表示されるための条件：
+
+### 必須条件
+
+| 条件 | 説明 |
+|------|------|
+| スタッフが明示的に紐づいている | `selectable_instructor_details.type` が `SELECTED` / `FIXED` / `RANDOM_SELECTED` かつ `items.length > 0` |
+| 設備が明示的に紐づいている | `selectable_resource_details.type` が `SELECTED` / `FIXED` / `RANDOM_SELECTED` かつ `items.length > 0` |
+
+### 選択不可となる条件
+
+| 条件 | 理由 |
+|------|------|
+| `selectable_instructor_details` が未設定または空 | スタッフが紐づいていない |
+| `selectable_instructor_details.type` が `ALL` または `RANDOM_ALL` | 明示的に紐づいていない |
+| `selectable_instructor_details.items` が空 | スタッフが0人 |
+| `selectable_resource_details` が未設定または空 | 設備が紐づいていない |
+| `selectable_resource_details.type` が `ALL` または `RANDOM_ALL` | 明示的に紐づいていない |
+| `selectable_resource_details.items` が空 | 設備が0個 |
+
+### 判定関数
+
+```typescript
+// スタッフが明示的に紐づいているか
+hasSelectableInstructors(program): boolean
+
+// 設備が明示的に紐づいているか
+hasSelectableResources(program): boolean
+
+// スタッフと設備の両方が紐づいているか
+isProgramFullyConfigured(program): boolean
+```
+
+---
+
 ## 制約チェックの比較
 
 ### 時間に関する制約
@@ -43,12 +82,16 @@
 >
 > **※3 同時予約可能数**: `resource.max_cc_reservable_num` で設定。同時間帯の予約数がこの値未満なら予約可能です。
 
-### 制約チェックが不要な条件
+### ⚠️ 重要：プログラムの表示条件
 
-| 条件 | 説明 |
+以下の条件に該当するプログラムは、メニュー一覧に**表示されません**：
+
+| 条件 | 理由 |
 |------|------|
-| `selectable_resource_details.type` が `ALL` または `RANDOM_ALL` | 設備チェックをスキップ |
-| `selectable_instructor_details.type` が `ALL` または `RANDOM_ALL` | 全スタッフから選択可能 |
+| `selectable_instructor_details.type` が `ALL` または `RANDOM_ALL` | スタッフが明示的に紐づいていない |
+| `selectable_resource_details.type` が `ALL` または `RANDOM_ALL` | 設備が明示的に紐づいていない |
+| `selectable_instructor_details` が未設定/空 | スタッフ設定なし |
+| `selectable_resource_details` が未設定/空 | 設備設定なし |
 
 ### ⚠️ 差異がある項目
 

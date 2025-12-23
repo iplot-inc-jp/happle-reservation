@@ -13,6 +13,7 @@ from functools import wraps
 from pathlib import Path
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -3048,31 +3049,37 @@ def get_choice_schedule_range():
         # 1. スタッフのスタジオ紐付け情報を取得（キャッシュ使用）
         instructor_studio_map = get_cached_instructor_studio_map(client)
         
-        # 2. 各日付のchoice/scheduleを取得
+        # 2. 各日付のchoice/scheduleを並列取得（高速化）
         schedules = {}
         actual_studio_id = None
         
-        for date in dates:
+        def fetch_schedule(date: str):
+            """単一日付のスケジュールを取得"""
             try:
                 response = client.get_choice_schedule(studio_room_id, date)
                 schedule = response.get("data", {}).get("schedule", {})
-                
-                # studio_idを取得（最初の有効なレスポンスから）
-                if not actual_studio_id:
-                    studio_room = schedule.get("studio_room_service", {})
-                    actual_studio_id = studio_room.get("studio_id") if studio_room else None
-                
-                schedules[date] = {
+                return date, {
                     "studio_room_service": schedule.get("studio_room_service"),
                     "shift": schedule.get("shift"),
                     "shift_studio_business_hour": schedule.get("shift_studio_business_hour", []),
                     "shift_instructor": schedule.get("shift_instructor", []),
                     "reservation_assign_instructor": list(schedule.get("reservation_assign_instructor", [])),
-                    "reservation_assign_resource": list(schedule.get("reservation_assign_resource", []))  # 設備の予約情報を追加
+                    "reservation_assign_resource": list(schedule.get("reservation_assign_resource", []))
                 }
             except Exception as e:
                 logger.warning(f"Failed to get schedule for {date}: {e}")
-                schedules[date] = None
+                return date, None
+        
+        # ThreadPoolExecutorで並列取得（最大7スレッド）
+        with ThreadPoolExecutor(max_workers=7) as executor:
+            futures = {executor.submit(fetch_schedule, date): date for date in dates}
+            for future in as_completed(futures):
+                date, schedule_data = future.result()
+                schedules[date] = schedule_data
+                # studio_idを取得（最初の有効なレスポンスから）
+                if schedule_data and not actual_studio_id:
+                    studio_room = schedule_data.get("studio_room_service", {})
+                    actual_studio_id = studio_room.get("studio_id") if studio_room else None
         
         # 3. 固定枠レッスンを範囲全体で1回だけ取得
         fixed_slot_lessons_by_date = {date: [] for date in dates}
@@ -3140,24 +3147,26 @@ def get_choice_schedule_range():
             except Exception as e:
                 logger.warning(f"Failed to get fixed slot lessons for range: {e}")
         
-        # 4. 予定ブロック（休憩ブロック）を各日付ごとに取得
+        # 4. 予定ブロック（休憩ブロック）を各日付ごとに並列取得（高速化）
         shift_slots_by_date = {date: [] for date in dates}
         shift_slot_reservations_by_date = {date: [] for date in dates}
         resource_shift_slot_reservations_by_date = {date: [] for date in dates}
         
         if actual_studio_id:
-            for date in dates:
+            def fetch_shift_slots(date: str):
+                """単一日付の予定ブロックを取得"""
                 try:
                     shift_slots_response = client.get_shift_slots({"studio_id": actual_studio_id, "date": date})
                     shift_slots_data = shift_slots_response.get("data", {}).get("shift_slots", {})
                     shift_slots = shift_slots_data.get("list", []) if isinstance(shift_slots_data, dict) else shift_slots_data
-                    shift_slots_by_date[date] = shift_slots
                     
-                    # 予定ブロックをスタッフと設備に分類
+                    instructor_reservations = []
+                    resource_reservations = []
+                    
                     for slot in shift_slots:
                         entity_type = slot.get("entity_type", "").upper()
                         if entity_type == "INSTRUCTOR":
-                            shift_slot_reservations_by_date[date].append({
+                            instructor_reservations.append({
                                 "entity_id": slot.get("entity_id"),
                                 "entity_type": "INSTRUCTOR",
                                 "start_at": slot.get("start_at"),
@@ -3167,7 +3176,7 @@ def get_choice_schedule_range():
                                 "description": slot.get("description", "")
                             })
                         elif entity_type == "RESOURCE":
-                            resource_shift_slot_reservations_by_date[date].append({
+                            resource_reservations.append({
                                 "entity_id": slot.get("entity_id"),
                                 "entity_type": "RESOURCE",
                                 "start_at": slot.get("start_at"),
@@ -3176,8 +3185,20 @@ def get_choice_schedule_range():
                                 "title": slot.get("title", ""),
                                 "description": slot.get("description", "")
                             })
+                    
+                    return date, shift_slots, instructor_reservations, resource_reservations
                 except Exception as e:
                     logger.warning(f"Failed to get shift slots for {date}: {e}")
+                    return date, [], [], []
+            
+            # ThreadPoolExecutorで並列取得
+            with ThreadPoolExecutor(max_workers=7) as executor:
+                futures = {executor.submit(fetch_shift_slots, date): date for date in dates}
+                for future in as_completed(futures):
+                    date, shift_slots, instructor_res, resource_res = future.result()
+                    shift_slots_by_date[date] = shift_slots
+                    shift_slot_reservations_by_date[date] = instructor_res
+                    resource_shift_slot_reservations_by_date[date] = resource_res
         
         # 5. 設備情報を取得（同時予約可能数を含む）
         resources_info = get_cached_resources(client, actual_studio_id)

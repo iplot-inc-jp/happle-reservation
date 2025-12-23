@@ -8,6 +8,7 @@ import os
 import time
 import json
 import logging
+import threading
 import requests
 from typing import Optional, Dict, Any, List
 from functools import wraps
@@ -37,8 +38,9 @@ class HacomonoClient:
         self.base_url = f"https://{brand_code}.admin.egw.hacomono.app/api/v2"
         self.token_url = f"https://{self.admin_domain}/api/oauth/token"
         
-        # Rate limiting
+        # Rate limiting (スレッドセーフ対応)
         self._last_request_time: Dict[str, float] = {}
+        self._rate_limit_lock = threading.Lock()
         self._rate_limits = {
             "GET": 10,  # 10 requests per second
             "POST": 2,
@@ -67,20 +69,21 @@ class HacomonoClient:
         }
     
     def _rate_limit(self, method: str):
-        """Rate limiting を適用"""
-        now = time.time()
+        """Rate limiting を適用（スレッドセーフ）"""
         key = method.upper()
         limit = self._rate_limits.get(key, 10)
         min_interval = 1.0 / limit
         
-        last_time = self._last_request_time.get(key, 0)
-        elapsed = now - last_time
-        
-        if elapsed < min_interval:
-            sleep_time = min_interval - elapsed
-            time.sleep(sleep_time)
-        
-        self._last_request_time[key] = time.time()
+        with self._rate_limit_lock:
+            now = time.time()
+            last_time = self._last_request_time.get(key, 0)
+            elapsed = now - last_time
+            
+            if elapsed < min_interval:
+                sleep_time = min_interval - elapsed
+                time.sleep(sleep_time)
+            
+            self._last_request_time[key] = time.time()
     
     def _handle_response(self, response: requests.Response) -> Dict[str, Any]:
         """レスポンスを処理"""

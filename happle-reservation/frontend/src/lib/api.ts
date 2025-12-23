@@ -87,6 +87,54 @@ export interface Program {
   selectable_instructor_details?: SelectableInstructorDetail[]  // 選択可能スタッフ詳細
 }
 
+/**
+ * プログラムに選択可能なスタッフがいるかどうかをチェック
+ * - selectable_instructor_details が未設定または空 → 全スタッフ選択可能 → true
+ * - type === 'ALL' → 全スタッフ選択可能 → true
+ * - type === 'SPECIFIC' かつ items.length > 0 → 特定のスタッフが選択可能 → true
+ * - type === 'SPECIFIC' かつ items.length === 0 → スタッフなし → false
+ */
+export function hasSelectableInstructors(program: Program): boolean {
+  const details = program.selectable_instructor_details
+  if (!details || details.length === 0) {
+    // 設定なし = 全スタッフ選択可能
+    return true
+  }
+  
+  // 最初の設定を使用（通常は1つのみ）
+  const detail = details[0]
+  if (detail.type === 'ALL') {
+    // 全スタッフ選択可能
+    return true
+  }
+  
+  if (detail.type === 'SPECIFIC') {
+    // 特定スタッフのみ: itemsに1つ以上のスタッフIDがあれば選択可能
+    return detail.items.length > 0
+  }
+  
+  return true
+}
+
+/**
+ * プログラムの選択可能なスタッフIDの一覧を取得
+ * - type === 'ALL' または未設定の場合は null（全スタッフ選択可能）
+ * - type === 'SPECIFIC' の場合は選択可能なスタッフIDの配列
+ */
+export function getSelectableInstructorIds(program: Program): number[] | null {
+  const details = program.selectable_instructor_details
+  if (!details || details.length === 0) {
+    return null  // 全スタッフ選択可能
+  }
+  
+  const detail = details[0]
+  if (detail.type === 'ALL') {
+    return null  // 全スタッフ選択可能
+  }
+  
+  return detail.items  // 選択可能なスタッフIDの配列
+}
+
 export interface ScheduleSlot {
   id: number
   studio_id: number
@@ -271,10 +319,32 @@ export async function getStudio(studioId: number): Promise<Studio | null> {
   return response.data?.studio || null
 }
 
-export async function getPrograms(studioId?: number): Promise<Program[]> {
+export interface GetProgramsOptions {
+  studioId?: number
+  filterBySelectableInstructors?: boolean  // 選択可能スタッフがいるプログラムのみ取得
+}
+
+export async function getPrograms(studioIdOrOptions?: number | GetProgramsOptions): Promise<Program[]> {
+  let studioId: number | undefined
+  let filterBySelectableInstructors = false
+  
+  if (typeof studioIdOrOptions === 'number') {
+    studioId = studioIdOrOptions
+  } else if (studioIdOrOptions) {
+    studioId = studioIdOrOptions.studioId
+    filterBySelectableInstructors = studioIdOrOptions.filterBySelectableInstructors ?? false
+  }
+  
   const params = studioId ? `?studio_id=${studioId}` : ''
   const response = await fetchApi<{ programs: Program[] }>(`/api/programs${params}`)
-  return response.data?.programs || []
+  let programs = response.data?.programs || []
+  
+  // 選択可能スタッフがいるプログラムのみにフィルタリング
+  if (filterBySelectableInstructors) {
+    programs = programs.filter(hasSelectableInstructors)
+  }
+  
+  return programs
 }
 
 export async function getProgram(programId: number): Promise<Program | null> {

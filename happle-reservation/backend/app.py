@@ -2188,6 +2188,19 @@ def create_choice_reservation():
             start_datetime = datetime.strptime(start_at, "%Y-%m-%d %H:%M:%S.%f").replace(tzinfo=jst)
             date_str = start_datetime.strftime("%Y-%m-%d")
             
+            # プログラム情報を取得して選択可能スタッフを確認
+            program_response = client.get_program(program_id)
+            program = program_response.get("data", {}).get("program", {})
+            selectable_instructor_details = program.get("selectable_instructor_details", [])
+            
+            # 選択可能スタッフIDを取得（None = 全スタッフ選択可能）
+            selectable_instructor_ids = None
+            if selectable_instructor_details:
+                first_detail = selectable_instructor_details[0]
+                if first_detail.get("type") == "SPECIFIC":
+                    selectable_instructor_ids = set(first_detail.get("items", []))
+                    logger.info(f"Program {program_id} has specific selectable instructors: {selectable_instructor_ids}")
+            
             # choice/scheduleから空いているスタッフを取得
             schedule_response = client.get_choice_schedule(studio_room_id, date_str)
             schedule = schedule_response.get("data", {}).get("schedule", {})
@@ -2221,11 +2234,16 @@ def create_choice_reservation():
                     logger.warning(f"Failed to parse reserved instructor time: {e}")
                     continue
             
-            # 空いているスタッフを抽出（スタジオ紐付けもチェック）
+            # 空いているスタッフを抽出（スタジオ紐付け & プログラム選択可能スタッフもチェック）
             available_instructors = []
             for instructor in shift_instructors:
                 instructor_id = instructor.get("instructor_id")
                 try:
+                    # プログラムの選択可能スタッフにいるかチェック
+                    if selectable_instructor_ids is not None and instructor_id not in selectable_instructor_ids:
+                        logger.debug(f"Instructor {instructor_id} not in program's selectable instructors, skipping")
+                        continue
+                    
                     # スタッフがスタジオに紐付けられているかチェック
                     # hacomonoのロジック: studio_idsが空 = 全店舗対応可能
                     instructor_studio_ids = instructor_studio_map.get(instructor_id, [])

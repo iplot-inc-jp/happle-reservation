@@ -3,7 +3,7 @@
 import { useEffect, useState, Suspense, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { sendGTMEvent } from '@next/third-parties/google'
-import { createChoiceReservation, getPrograms, Program } from '@/lib/api'
+import { createChoiceReservation, getPrograms, Program, hasSelectableInstructors } from '@/lib/api'
 import { format, parse } from 'date-fns'
 import { ja } from 'date-fns/locale'
 
@@ -80,8 +80,11 @@ function FreeBookingContent() {
 
       try {
         setLoading(true)
-        // プログラム一覧を取得
-        const programsData = await getPrograms(studioId ? parseInt(studioId) : undefined)
+        // プログラム一覧を取得（選択可能スタッフがいるプログラムのみ）
+        const programsData = await getPrograms({
+          studioId: studioId ? parseInt(studioId) : undefined,
+          filterBySelectableInstructors: true
+        })
         setPrograms(programsData)
         // URLパラメータでプログラムが指定されていればそれを選択、なければ最初のプログラムを選択
         if (programIdParam) {

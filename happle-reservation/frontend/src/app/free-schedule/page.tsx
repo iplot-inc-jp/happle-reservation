@@ -3,7 +3,7 @@
 import { useEffect, useState, Suspense, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { sendGTMEvent } from '@next/third-parties/google'
-import { getChoiceScheduleRange, getStudios, getPrograms, getStudioRooms, checkReservability, ChoiceSchedule, Studio, Program, StudioRoom } from '@/lib/api'
+import { getChoiceScheduleRange, getStudios, getPrograms, getStudioRooms, checkReservability, ChoiceSchedule, Studio, Program, StudioRoom, hasSelectableInstructors, getSelectableInstructorIds } from '@/lib/api'
 import { format, addDays, startOfDay, subDays, parseISO, isSameDay } from 'date-fns'
 import { ja } from 'date-fns/locale'
 
@@ -114,8 +114,11 @@ function FreeScheduleContent() {
     }
     
     try {
-        // Load Programs
-        const programsData = await getPrograms(studio.id)
+        // Load Programs（選択可能スタッフがいるプログラムのみ）
+        const programsData = await getPrograms({
+          studioId: studio.id,
+          filterBySelectableInstructors: true
+        })
         setPrograms(programsData)
         
         // URLパラメータでプログラムが指定されている場合は自動選択

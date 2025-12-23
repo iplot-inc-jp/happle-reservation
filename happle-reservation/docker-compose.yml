@@ -16,6 +16,14 @@ services:
       - HACOMONO_ACCESS_TOKEN=${HACOMONO_ACCESS_TOKEN}
       - HACOMONO_REFRESH_TOKEN=${HACOMONO_REFRESH_TOKEN}
       - CORS_ORIGINS=http://localhost:3002,http://localhost:3001,http://localhost:3000,https://happle-reservation-frontend.onrender.com
+      # SES設定
+      - SES_ACCESS_KEY_ID=${SES_ACCESS_KEY_ID}
+      - SES_SECRET_ACCESS_KEY=${SES_SECRET_ACCESS_KEY}
+      - SES_REGION=${SES_REGION:-ap-northeast-1}
+      - SES_DOMAIN=${SES_DOMAIN:-reserve-now.jp}
+      - SES_FROM_EMAIL=${SES_FROM_EMAIL:-noreply@reserve-now.jp}
+      # Slack設定
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
     volumes:
       - ./backend:/app
     command: python app.py

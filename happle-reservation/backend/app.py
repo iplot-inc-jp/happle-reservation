@@ -2586,7 +2586,7 @@ def create_choice_reservation():
         "member_id": member_id,
         "studio_room_id": studio_room_id,
         "program_id": program_id,
-        "ticket_id": 5,  # Web予約チケット
+        "ticket_id": ticket_id_to_grant,  # プログラムに紐づくチケット、またはデフォルト
         "instructor_ids": instructor_ids,
         "start_at": start_at
     }

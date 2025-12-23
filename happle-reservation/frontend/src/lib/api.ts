@@ -79,6 +79,19 @@ export interface SelectableInstructorDetail {
   items?: SelectableInstructorItem[]  // SELECTED, FIXED, RANDOM_SELECTEDの場合のみ
 }
 
+// 選択可能設備の候補
+export interface SelectableResourceItem {
+  resource_id: number
+  resource_code?: string
+  resource_name?: string
+}
+
+// 選択可能設備詳細
+export interface SelectableResourceDetail {
+  type: 'ALL' | 'SELECTED' | 'FIXED' | 'RANDOM_ALL' | 'RANDOM_SELECTED'
+  items?: SelectableResourceItem[]
+}
+
 export interface Program {
   id: number
   name: string
@@ -95,6 +108,7 @@ export interface Program {
   before_interval_minutes?: number | null  // 開始前ブロック時間
   after_interval_minutes?: number | null  // 終了後ブロック時間
   selectable_instructor_details?: SelectableInstructorDetail[]  // 選択可能スタッフ詳細
+  selectable_resource_details?: SelectableResourceDetail[]  // 選択可能設備詳細
 }
 
 /**
@@ -279,12 +293,14 @@ export interface ChoiceSchedule {
     end_at: string
   }>
   reservation_assign_instructor: Array<{
-    reservation_id: number
+    reservation_id?: number
     entity_id: number
-    date: string
+    date?: string
     start_at: string
     end_at: string
-    reservation_type?: string  // CHOICE or FIXED_SLOT_LESSON
+    reservation_type?: string  // CHOICE, FIXED_SLOT_LESSON, or SHIFT_SLOT
+    title?: string  // SHIFT_SLOTの場合のみ
+    description?: string  // SHIFT_SLOTの場合のみ
   }>
   // 固定枠レッスン情報
   fixed_slot_lessons?: Array<{
@@ -303,6 +319,17 @@ export interface ChoiceSchedule {
   // スタッフのスタジオ紐付けマップ { "instructor_id": studio_ids[] }
   // JSONではキーは文字列になる
   instructor_studio_map?: Record<string, number[]>
+  // 予定ブロック（休憩ブロック）
+  shift_slots?: Array<{
+    id?: number
+    entity_type: 'INSTRUCTOR' | 'RESOURCE'
+    entity_id: number
+    entity_name?: string
+    start_at: string
+    end_at: string
+    title?: string
+    description?: string
+  }>
 }
 
 export interface AvailableInstructor {

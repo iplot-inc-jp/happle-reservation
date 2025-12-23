@@ -244,11 +244,12 @@ function FreeScheduleContent() {
   }
 
   // インターバルを考慮した予約済み判定
+  // 休憩ブロック（reservation_typeがBREAKやBLOCKなど）も予約不可として扱う
   const isBlockedByInterval = (
     instructorId: number,
     cellTime: Date,
     cellEndTime: Date,
-    reservedSlots: Array<{ entity_id: number; start_at: string; end_at: string }>
+    reservedSlots: Array<{ entity_id: number; start_at: string; end_at: string; reservation_type?: string }>
   ): boolean => {
     const beforeInterval = selectedProgram?.before_interval_minutes || 0
     const afterInterval = selectedProgram?.after_interval_minutes || 0
@@ -259,10 +260,23 @@ function FreeScheduleContent() {
       const resStart = parseISO(res.start_at)
       const resEnd = parseISO(res.end_at)
       
-      // インターバルを考慮したブロック範囲
-      // 予約の before_interval 分前から after_interval 分後までがブロック
-      const blockStart = new Date(resStart.getTime() - beforeInterval * 60000)
-      const blockEnd = new Date(resEnd.getTime() + afterInterval * 60000)
+      // 休憩ブロックの場合はインターバルを考慮せず、そのままブロック
+      const reservationType = (res.reservation_type || '').toUpperCase()
+      const isBlock = ['BREAK', 'BLOCK', 'REST', '休憩', 'ブロック'].includes(reservationType)
+      
+      let blockStart: Date
+      let blockEnd: Date
+      
+      if (isBlock) {
+        // 休憩ブロックの場合は、その時間帯をそのままブロック
+        blockStart = resStart
+        blockEnd = resEnd
+      } else {
+        // インターバルを考慮したブロック範囲
+        // 予約の before_interval 分前から after_interval 分後までがブロック
+        blockStart = new Date(resStart.getTime() - beforeInterval * 60000)
+        blockEnd = new Date(resEnd.getTime() + afterInterval * 60000)
+      }
       
       // このスロットがブロック範囲と重複するか
       return cellTime < blockEnd && cellEndTime > blockStart

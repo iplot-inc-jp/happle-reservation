@@ -16,6 +16,7 @@
 | プログラムの選択可能スタッフか | ✅ | ✅ | ✅ |
 | 既存予約と重複しないか（インターバル考慮） | ✅ | ✅ | ✅ |
 | コースがシフト時間内に収まるか | ✅ | ✅ | ✅ |
+| 予定ブロック（休憩ブロック）と重複しないか | ✅ | ✅ | ✅ |
 
 ### ⚠️ 差異がある項目
 
@@ -51,13 +52,22 @@
     end_at: string
   }],
   reservation_assign_instructor: [{
-    entity_id: number,      // instructor_id
+    entity_id: number,        // instructor_id
     start_at: string,
-    end_at: string
+    end_at: string,
+    reservation_type?: string // CHOICE, FIXED_SLOT_LESSON, SHIFT_SLOT
   }],
   instructor_studio_map: {
     [instructor_id: string]: number[]  // スタッフが紐付けられているスタジオID一覧
-  }
+  },
+  shift_slots: [{             // 予定ブロック（休憩ブロック）
+    entity_type: 'INSTRUCTOR' | 'RESOURCE',
+    entity_id: number,
+    start_at: string,
+    end_at: string,
+    title?: string,
+    description?: string
+  }]
 }
 ```
 
@@ -70,6 +80,14 @@
       instructor_id: number,
       instructor_name: string,
       ...
+    }]
+  }],
+  selectable_resource_details: [{    // 選択可能設備詳細
+    type: 'ALL' | 'SELECTED' | 'FIXED' | 'RANDOM_ALL' | 'RANDOM_SELECTED',
+    items: [{
+      resource_id: number,
+      resource_code?: string,
+      resource_name?: string
     }]
   }],
   service_minutes: number,           // コースの所要時間
@@ -85,6 +103,7 @@
 1. `client.get_program(program_id)` - プログラム情報
 2. `client.get_choice_schedule(studio_room_id, date_str)` - スケジュール情報
 3. `get_cached_instructor_studio_map(client)` - スタッフ×スタジオ紐付け情報
+4. `client.get_shift_slots(query)` - 予定ブロック（休憩ブロック）情報
 
 ---
 
@@ -110,9 +129,12 @@
    │   └─ selectable_instructor_details.type が ALL/RANDOM_ALL → 全員OK
    │   └─ SELECTED/FIXED/RANDOM_SELECTED → items の instructor_id にいるか
    │
-   └─ 予約済みチェック（インターバル考慮）
-       └─ reservation_assign_instructor の各予約について
-       └─ [予約開始 - before_interval] 〜 [予約終了 + after_interval] と重複するか
+   ├─ 予約済みチェック（インターバル考慮）
+   │   └─ reservation_assign_instructor の各予約について
+   │   └─ [予約開始 - before_interval] 〜 [予約終了 + after_interval] と重複するか
+   │
+   └─ 予定ブロック（休憩ブロック）チェック
+       └─ reservation_type が SHIFT_SLOT の場合はインターバルなしでブロック
 
 3. 1人でも空いているスタッフがいれば「予約可能」
 ```
@@ -141,8 +163,13 @@
    ├─ シフト時間チェック
    │   └─ instructor_start <= start_datetime < instructor_end
    │
-   └─ 予約済みチェック
-       └─ 30分固定で重複チェック（⚠️ インターバル未考慮）
+   ├─ 予約済みチェック（インターバル考慮）
+   │   └─ 予約と重複するかチェック
+   │   └─ インターバルを考慮
+   │
+   └─ 予定ブロック（休憩ブロック）チェック
+       └─ shift_slots APIで取得したブロックと重複するか
+       └─ reservation_type が SHIFT_SLOT の場合はインターバルなしでブロック
 
 5. 空いているスタッフの最初の1名を使用
 ```
@@ -183,4 +210,71 @@ hacomono API から取得できるプログラムの選択可能スタッフ設�
 | `FIXED` | 固定スタッフ | items のスタッフに固定 |
 | `RANDOM_ALL` | 全スタッフから1名を自動選択 | 無視 |
 | `RANDOM_SELECTED` | 選択候補から1名を自動選択 | items のスタッフから選択 |
+
+---
+
+## 予定ブロック（休憩ブロック）の仕様
+
+hacomono API `/reservation/shift_slots` から取得できるスタッフの手動ブロック時間:
+
+```json
+{
+  "shift_slots": {
+    "list": [
+      {
+        "id": 1234,
+        "shift_id": 567,
+        "studio_id": 1,
+        "entity_type": "INSTRUCTOR",
+        "entity_id": 123,
+        "entity_code": "INS001",
+        "entity_name": "田中太郎",
+        "date": "2025-12-23",
+        "start_at": "2025-12-23T12:00:00+09:00",
+        "end_at": "2025-12-23T13:00:00+09:00",
+        "title": "休憩",
+        "description": ""
+      }
+    ]
+  }
+}
+```
+
+### entity_type の意味
+
+| entity_type | 説明 |
+|-------------|------|
+| `INSTRUCTOR` | スタッフの予定ブロック |
+| `RESOURCE` | 設備の予定ブロック |
+
+### 予定ブロックの扱い
+
+- **フロントエンド**: `reservation_assign_instructor` に `reservation_type: "SHIFT_SLOT"` として統合
+- **バックエンド**: 予約作成時に `shift_slots` を別途取得してチェック
+- **インターバル**: 予定ブロックはインターバルを考慮せず、そのままブロック
+
+---
+
+## selectable_resource_details の仕様
+
+プログラムに紐づく設備（リソース）の設定。スタッフと同様の構造:
+
+```json
+{
+  "selectable_resource_details": [
+    {
+      "type": "SELECTED",
+      "items": [
+        {
+          "resource_id": 456,
+          "resource_code": "RES001",
+          "resource_name": "施術室A"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**注意**: 設備の空き状況チェックは現在未実装。設備の予約情報（`reservation_assign_resource`）が必要な場合は追加実装が必要。
 

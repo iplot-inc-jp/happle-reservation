@@ -401,6 +401,40 @@ class HacomonoClient:
             "reservation_ids": reservation_ids
         })
     
+    def get_shift_slots(self, query: Optional[Dict] = None) -> Dict[str, Any]:
+        """予定ブロック（休憩ブロック）を取得
+        
+        スタッフや設備の手動ブロック時間を取得します。
+        
+        Args:
+            query: 検索クエリ {
+                "studio_id": int,  # 店舗ID
+                "date": str,  # 営業日（yyyy-MM-dd形式）
+                "shift_id": int,  # シフトID
+                "id": int  # 予定ブロックID
+            }
+        
+        Returns:
+            shift_slots: [{
+                "id": int,
+                "shift_id": int,
+                "studio_id": int,
+                "entity_type": "INSTRUCTOR" | "RESOURCE",
+                "entity_id": int,
+                "entity_code": str,
+                "entity_name": str,
+                "date": str,
+                "start_at": str,
+                "end_at": str,
+                "title": str,
+                "description": str
+            }]
+        """
+        params = {}
+        if query:
+            params["query"] = json.dumps(query)
+        return self.get("/reservation/shift_slots", params=params)
+    
     # ==================== チケット API ====================
     
     def get_tickets(self, query: Optional[Dict] = None) -> Dict[str, Any]:

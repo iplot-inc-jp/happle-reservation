@@ -65,9 +65,9 @@ _instructor_studio_map_cache = None
 _instructor_studio_map_cache_time = None
 INSTRUCTOR_CACHE_TTL_SECONDS = 60  # 60秒間キャッシュ
 
-# キャッシュ: 設備情報（同時予約可能数を含む）
-_resources_cache = None
-_resources_cache_time = None
+# キャッシュ: 設備情報（同時予約可能数を含む）- 店舗ごとにキャッシュ
+_resources_cache_by_studio: dict = {}  # { studio_id: { resource_id: {...} } }
+_resources_cache_time_by_studio: dict = {}  # { studio_id: datetime }
 RESOURCES_CACHE_TTL_SECONDS = 300  # 5分間キャッシュ（設備情報は頻繁に変わらない）
 
 
@@ -120,21 +120,28 @@ def get_cached_instructor_studio_map(client: HacomonoClient) -> dict:
 
 
 def get_cached_resources(client: HacomonoClient, studio_id: int = None) -> dict:
-    """設備情報をキャッシュ付きで取得
+    """設備情報をキャッシュ付きで取得（店舗ごと）
+    
+    Args:
+        client: hacomono APIクライアント
+        studio_id: 店舗ID（指定された店舗の設備のみ取得）
     
     Returns:
-        { resource_id: { "id": int, "name": str, "max_cc_reservable_num": int, ... } }
+        { resource_id: { "id": int, "name": str, "max_cc_reservable_num": int, "studio_id": int, ... } }
     """
-    global _resources_cache, _resources_cache_time
+    global _resources_cache_by_studio, _resources_cache_time_by_studio
     
     now = datetime.now()
+    cache_key = studio_id or "all"  # 店舗IDがない場合は"all"をキーに
     
     # キャッシュが有効ならそれを返す
-    if (_resources_cache is not None and 
-        _resources_cache_time is not None and
-        (now - _resources_cache_time).total_seconds() < RESOURCES_CACHE_TTL_SECONDS):
-        logger.debug("Using cached resources")
-        return _resources_cache
+    cached_data = _resources_cache_by_studio.get(cache_key)
+    cached_time = _resources_cache_time_by_studio.get(cache_key)
+    if (cached_data is not None and 
+        cached_time is not None and
+        (now - cached_time).total_seconds() < RESOURCES_CACHE_TTL_SECONDS):
+        logger.debug(f"Using cached resources for studio {cache_key}")
+        return cached_data
     
     # 新規取得
     resources_map = {}
@@ -158,17 +165,17 @@ def get_cached_resources(client: HacomonoClient, studio_id: int = None) -> dict:
             }
         
         # キャッシュを更新
-        _resources_cache = resources_map
-        _resources_cache_time = now
-        logger.info(f"Loaded resources cache: {len(resources_map)} resources")
+        _resources_cache_by_studio[cache_key] = resources_map
+        _resources_cache_time_by_studio[cache_key] = now
+        logger.info(f"Loaded resources cache for studio {cache_key}: {len(resources_map)} resources")
         return resources_map
     except Exception as e:
-        logger.warning(f"Failed to get resources: {e}")
+        logger.warning(f"Failed to get resources for studio {cache_key}: {e}")
     
     # 失敗した場合、キャッシュがあればそれを返す
-    if _resources_cache is not None:
-        logger.warning("Using stale cache for resources")
-        return _resources_cache
+    if cached_data is not None:
+        logger.warning(f"Using stale cache for resources (studio {cache_key})")
+        return cached_data
     
     return resources_map
 
@@ -2520,17 +2527,23 @@ def create_choice_reservation():
                         logger.warning(f"Failed to parse reserved resource time: {e}")
                         continue
                 
-                # 空いている設備を抽出（同時予約可能数を考慮）
+                # 空いている設備を抽出（同時予約可能数と店舗紐付けを考慮）
                 available_resources = []
                 if selectable_resource_ids:
                     for resource_id in selectable_resource_ids:
+                        # 設備がこの店舗に紐づいているかチェック
+                        # resources_info に含まれていない設備は、この店舗の設備ではないのでスキップ
+                        resource_info = resources_info.get(resource_id, {})
+                        if not resource_info:
+                            logger.debug(f"Resource {resource_id} not found in studio {studio_id}, skipping")
+                            continue
+                        
                         # 予定ブロックで完全ブロックされている場合はスキップ
                         if resource_is_blocked.get(resource_id, False):
                             logger.debug(f"Resource {resource_id} is blocked by SHIFT_SLOT")
                             continue
                         
                         # 同時予約可能数を取得（デフォルト1）
-                        resource_info = resources_info.get(resource_id, {})
                         max_cc_reservable_num = resource_info.get("max_cc_reservable_num", 1)
                         current_count = resource_reservation_count.get(resource_id, 0)
                         

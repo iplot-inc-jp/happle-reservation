@@ -8,27 +8,47 @@
 
 ## 制約チェックの比較
 
+### 時間に関する制約
+
+| 制約項目 | 予約選択画面（FE） | 予約実行時（BE） | 一致 |
+|---------|-------------------|-----------------|------|
+| 予約可能範囲（30分後以降） | ✅ | ✅ | ✅ |
+| 予約可能範囲（14日後まで） | ✅ | ✅ | ✅ |
+| 予約締切時間（開始X分前まで） | ✅ | ❌（APIに任せる） | ⚠️ |
+| 営業時間内か | ✅ | ❌（APIに任せる） | ⚠️ |
+
 ### スタッフに関する制約
 
 | 制約項目 | 予約選択画面（FE） | 予約実行時（BE） | 一致 |
 |---------|-------------------|-----------------|------|
-| 営業時間内か | ✅ | ❌（APIに任せる） | ⚠️ |
 | スタッフのシフト時間内か | ✅ | ✅ | ✅ |
-| スタッフがスタジオに紐付けられているか | ✅ | ✅ | ✅ |
+| スタッフがスタジオに紐付けられているか ※1 | ✅ | ✅ | ✅ |
 | プログラムの選択可能スタッフか | ✅ | ✅ | ✅ |
 | 既存予約と重複しないか（インターバル考慮） | ✅ | ✅ | ✅ |
 | コースがシフト時間内に収まるか | ✅ | ✅ | ✅ |
 | 予定ブロック（休憩ブロック）と重複しないか | ✅ | ✅ | ✅ |
+
+> **※1 スタッフの店舗紐付け**: スタッフの `studio_ids` が空配列の場合は「全店舗対応可能」として扱います。特定の店舗に紐付けられている場合のみ、その店舗でのみ予約可能です。
 
 ### 設備（リソース）に関する制約
 
 | 制約項目 | 予約選択画面（FE） | 予約実行時（BE） | 一致 |
 |---------|-------------------|-----------------|------|
 | プログラムの選択可能設備か | ✅ | ✅ | ✅ |
-| 設備の既存予約と重複しないか | ✅ | ✅ | ✅ |
+| 設備がその店舗に紐付けられているか ※2 | ✅ | ✅ | ✅ |
+| 設備の同時予約可能数を超えていないか ※3 | ✅ | ✅ | ✅ |
 | 設備の予定ブロックと重複しないか | ✅ | ✅ | ✅ |
 
-> **Note**: 設備の制約チェックが必要なのは `selectable_resource_details.type` が `SELECTED`, `FIXED`, `RANDOM_SELECTED` の場合のみです。`ALL`, `RANDOM_ALL` の場合は設備チェックをスキップします。
+> **※2 設備の店舗紐付け**: 設備は必ず1つの店舗に紐付けられます（`resource.studio_id`）。その店舗の設備のみが予約対象となります。
+>
+> **※3 同時予約可能数**: `resource.max_cc_reservable_num` で設定。同時間帯の予約数がこの値未満なら予約可能です。
+
+### 制約チェックが不要な条件
+
+| 条件 | 説明 |
+|------|------|
+| `selectable_resource_details.type` が `ALL` または `RANDOM_ALL` | 設備チェックをスキップ |
+| `selectable_instructor_details.type` が `ALL` または `RANDOM_ALL` | 全スタッフから選択可能 |
 
 ### ⚠️ 差異がある項目
 
@@ -130,9 +150,14 @@
 ### 予約選択画面（フロントエンド）
 
 ```
+0. 時間範囲チェック
+   ├─ 30分後以降か → 「too_soon」
+   ├─ 14日後以内か → 「too_far」
+   └─ 予約締切時間（開始X分前）を過ぎていないか → 「deadline_passed」
+
 1. 営業時間チェック
    └─ shift_studio_business_hour から is_holiday = false の日を取得
-   └─ その日の start_at 〜 end_at 内かチェック
+   └─ その日の start_at 〜 end_at 内にコースが収まるか → 「outside_hours」
 
 2. 各スタッフについてループ
    │
@@ -146,13 +171,16 @@
    ├─ プログラム選択可能スタッフチェック
    │   └─ selectable_instructor_details.type が ALL/RANDOM_ALL → 全員OK
    │   └─ SELECTED/FIXED/RANDOM_SELECTED → items の instructor_id にいるか
+   │   └─ 選択可能なスタッフがいない → 「no_selectable_staff」
    │
    ├─ 予約済みチェック（インターバル考慮）
    │   └─ reservation_assign_instructor の各予約について
-   │   └─ [予約開始 - before_interval] 〜 [予約終了 + after_interval] と重複するか
+   │   └─ [予約開始 - before_interval] 〜 [予約終了 + after_interval] と重複
+   │   └─ 全員ブロック → 「interval_blocked」
    │
    └─ 予定ブロック（休憩ブロック）チェック
        └─ reservation_type が SHIFT_SLOT の場合はインターバルなしでブロック
+       └─ 全員予約済み → 「fully_booked」
 
 3. 1人でも空いているスタッフがいれば設備チェックへ
 
@@ -163,25 +191,34 @@
    │   └─ SELECTED/FIXED/RANDOM_SELECTED → items の resource_id を取得
    │
    ├─ 各設備についてループ
-   │   └─ reservation_assign_resource と重複するか
-   │   └─ 設備の予定ブロック（SHIFT_SLOT）と重複するか
+   │   ├─ 設備がこの店舗に紐づいているか（resources_info に存在するか）
+   │   ├─ 予定ブロック（SHIFT_SLOT）で完全ブロックされているか
+   │   ├─ 予約数が同時予約可能数（max_cc_reservable_num）未満か
+   │   └─ 空きなし → 「no_available_resource」
    │
-   └─ 1つでも空いている設備があれば「予約可能」
+   └─ 1つでも空いている設備があれば「予約可能」（available）
 ```
 
 ### 予約実行時（バックエンド）
 
 ```
+0. 予約日時チェック
+   └─ 30分後以降 〜 14日後以内か → エラーコード「DATETIME_OUT_OF_RANGE」
+
 1. プログラム情報を取得
    └─ selectable_instructor_details から選択可能スタッフIDを抽出
+   └─ selectable_resource_details から選択可能設備IDを抽出
 
 2. スケジュール情報を取得
    └─ choice/schedule API からシフト情報・予約情報を取得
 
 3. スタッフ×スタジオ紐付け情報を取得
-   └─ キャッシュから取得（5分間キャッシュ）
+   └─ キャッシュから取得（60秒間キャッシュ）
 
-4. 各スタッフについてループ
+4. 設備情報を取得
+   └─ キャッシュから取得（店舗ごと、5分間キャッシュ）
+
+5. 各スタッフについてループ
    │
    ├─ プログラム選択可能スタッフチェック
    │   └─ selectable_instructor_ids に含まれるか（None なら全員OK）
@@ -191,33 +228,32 @@
    │   └─ 空配列の場合は「全店舗対応可能」として許可
    │
    ├─ シフト時間チェック
-   │   └─ instructor_start <= start_datetime < instructor_end
+   │   └─ instructor_start <= start_datetime かつ proposed_end <= instructor_end
    │
    ├─ 予約済みチェック（インターバル考慮）
    │   └─ 予約と重複するかチェック
-   │   └─ インターバルを考慮
+   │   └─ インターバルを考慮（before_interval_minutes, after_interval_minutes）
    │
    └─ 予定ブロック（休憩ブロック）チェック
        └─ shift_slots APIで取得したブロックと重複するか
        └─ reservation_type が SHIFT_SLOT の場合はインターバルなしでブロック
 
-5. 空いているスタッフの最初の1名を使用
+6. 空いているスタッフの最初の1名を使用
+   └─ いない場合 → エラーコード「NO_AVAILABLE_INSTRUCTOR」
 
-6. 設備チェック（プログラムが設備を必要とする場合のみ）
+7. 設備チェック（プログラムが設備を必要とする場合のみ）
    │
-   ├─ selectable_resource_details から選択可能設備IDを取得
+   ├─ 選択可能設備IDを取得
    │   └─ type が ALL/RANDOM_ALL → チェック不要
    │   └─ SELECTED/FIXED/RANDOM_SELECTED → items の resource_id を取得
    │
-   ├─ reservation_assign_resource（既存予約）を取得
-   │
-   ├─ 設備の予定ブロック（shift_slots で entity_type: RESOURCE）を取得
-   │
    ├─ 各設備についてループ
-   │   └─ 既存予約と重複するか
-   │   └─ 予定ブロックと重複するか
+   │   ├─ 設備がこの店舗に紐づいているか（resources_info に存在するか）
+   │   ├─ 予定ブロック（SHIFT_SLOT）で完全ブロックされているか
+   │   └─ 予約数が同時予約可能数（max_cc_reservable_num）未満か
    │
    └─ 空いている設備の最初の1つを使用（resource_id_set パラメータに設定）
+       └─ いない場合 → エラーコード「NO_AVAILABLE_RESOURCE」
 ```
 
 ---
@@ -402,8 +438,38 @@ hacomono API `/reservation/shift_slots` から取得できるスタッフの手�
 
 2. **バックエンド**:
    - 予約作成時に設備の空き状況をチェック
-   - 設備の `max_cc_reservable_num`（同時予約可能数）を取得してキャッシュ（5分間）
+   - 設備の `max_cc_reservable_num`（同時予約可能数）を取得してキャッシュ（店舗ごと、5分間）
+   - 設備がその店舗に紐づいているかチェック（`resources_info` に存在するか）
    - 同時間帯の予約数をカウントし、`max_cc_reservable_num` 未満なら予約可能
    - 空いている設備があれば `resource_id_set` パラメータに設定して予約
    - 設備がない場合はエラー「この時間帯に利用可能な設備がありません」を返す
+
+---
+
+## エラーコード一覧
+
+### フロントエンド（カレンダー表示時）
+
+| エラーコード | 表示 | 色 | 説明 |
+|-------------|------|-----|------|
+| `available` | ◎ | 緑 | 予約可能 |
+| `holiday` | - | 薄グレー | 休業日 |
+| `outside_hours` | - | グレー | 営業時間外（コースが収まらない） |
+| `too_soon` | - | グレー | 予約開始前（30分後以降から予約可能） |
+| `too_far` | - | グレー | 予約期限外（14日後まで） |
+| `deadline_passed` | × | 黄 | 予約締切を過ぎている |
+| `fully_booked` | × | 赤 | 満席（全スタッフ予約済み） |
+| `interval_blocked` | × | 紫 | インターバルでブロック中 |
+| `no_selectable_staff` | × | グレー | 選択可能なスタッフがいない |
+| `no_available_resource` | × | オレンジ | 利用可能な設備がない |
+
+### バックエンド（予約作成時）
+
+| エラーコード | HTTPステータス | 説明 |
+|-------------|---------------|------|
+| `DATETIME_OUT_OF_RANGE` | 400 | 予約日時が有効範囲外 |
+| `NO_AVAILABLE_INSTRUCTOR` | 400 | 対応可能なスタッフがいない |
+| `NO_AVAILABLE_RESOURCE` | 400 | 利用可能な設備がない |
+| `INSTRUCTOR_FETCH_ERROR` | 400 | スタッフ情報の取得に失敗 |
+| `CMN_000022` | 400 | メールアドレスが既に使用されている（hacomono API）|
 

@@ -348,6 +348,12 @@ function FreeScheduleContent() {
     const resourceIdArray = Array.from(selectableResourceIds)
     for (let i = 0; i < resourceIdArray.length; i++) {
       const resourceId = resourceIdArray[i]
+      
+      // 設備がこの店舗に紐づいているかチェック
+      // resourcesInfo に含まれていない設備は、この店舗の設備ではないのでスキップ
+      const resourceInfo = resourcesInfo[String(resourceId)]
+      if (!resourceInfo) continue
+      
       const { reservationCount, isBlocked } = getResourceAvailability(
         resourceId, cellTime, cellEndTime, reservedResources
       )
@@ -356,8 +362,7 @@ function FreeScheduleContent() {
       if (isBlocked) continue
       
       // 同時予約可能数を取得（デフォルト1）
-      const resourceInfo = resourcesInfo[String(resourceId)]
-      const maxReservableNum = resourceInfo?.max_cc_reservable_num || 1
+      const maxReservableNum = resourceInfo.max_cc_reservable_num || 1
       
       // 予約数が同時予約可能数未満なら利用可能
       if (reservationCount < maxReservableNum) {

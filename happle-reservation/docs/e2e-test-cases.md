@@ -242,3 +242,4 @@ curl -X POST "http://localhost:5021/api/reservations/choice" \
 | 中 | TC-1.1, TC-2.1, TC-2.2, TC-4.3, TC-6.1 |
 | 低 | TC-2.3, TC-2.4, TC-5.5, TC-8.x |
 
+

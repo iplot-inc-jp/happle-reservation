@@ -29,6 +29,9 @@ function LinkGeneratorContent() {
   const [studioUrl, setStudioUrl] = useState('')
   const [studioEmail, setStudioEmail] = useState('')
   
+  // 支払い方法
+  const [paymentType, setPaymentType] = useState<'credit_card' | 'credit_card_cash' | ''>('')
+  
   // 生成されたURL
   const [generatedUrl, setGeneratedUrl] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
@@ -190,6 +193,9 @@ function LinkGeneratorContent() {
     if (studioUrl) params.set('studio_url', studioUrl)
     if (studioEmail) params.set('studio_email', studioEmail)
     
+    // 支払い方法
+    if (paymentType) params.set('payment_type', paymentType)
+    
     const queryString = params.toString()
     // 自由枠予約画面へのリンクを生成
     const url = queryString ? `${baseUrl}/?${queryString}` : `${baseUrl}`
@@ -332,6 +338,25 @@ function LinkGeneratorContent() {
             {selectedStudioId && filteredPrograms.length === 0 && !programsLoading && (
               <p className="text-sm text-accent-500 mt-1">この店舗で選択可能なメニューがありません</p>
             )}
+          </div>
+
+          {/* 支払い方法 */}
+          <div>
+            <label className="block text-sm font-medium text-accent-700 mb-2">
+              支払い方法 <span className="text-accent-400">（任意）</span>
+            </label>
+            <select
+              value={paymentType}
+              onChange={(e) => setPaymentType(e.target.value as 'credit_card' | 'credit_card_cash' | '')}
+              className="w-full px-4 py-3 border border-accent-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white"
+            >
+              <option value="">支払い方法を指定しない</option>
+              <option value="credit_card">クレジットカード</option>
+              <option value="credit_card_cash">クレジットカード/現金</option>
+            </select>
+            <p className="text-xs text-accent-500 mt-1">
+              選択すると予約確認画面で支払い方法の確認チェックが必須になります
+            </p>
           </div>
 
           {/* LINE公式アカウントURL */}

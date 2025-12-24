@@ -85,3 +85,4 @@ https://happle-reservation-frontend.onrender.com,https://reserve-now.jp,https://
 - [Render Environment Variables](https://render.com/docs/environment-variables)
 
 
+

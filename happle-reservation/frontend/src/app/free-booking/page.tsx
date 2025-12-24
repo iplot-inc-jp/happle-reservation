@@ -46,6 +46,9 @@ function FreeBookingContent() {
   const studioTel = searchParams.get('studio_tel')
   const studioUrl = searchParams.get('studio_url')
   const studioEmail = searchParams.get('studio_email')
+  
+  // 支払い方法
+  const paymentType = searchParams.get('payment_type') as 'credit_card' | 'credit_card_cash' | null
 
   // Derive date and time from startAt if not provided explicitly
   const parsedStartAt = startAt ? parse(startAt, 'yyyy-MM-dd HH:mm:ss.SSS', new Date()) : null
@@ -60,6 +63,9 @@ function FreeBookingContent() {
   
   // Confirmation mode state
   const [isConfirming, setIsConfirming] = useState(false)
+  
+  // 支払い方法確認チェック状態
+  const [paymentConfirmed, setPaymentConfirmed] = useState(false)
   
   const [formData, setFormData] = useState<FormData>({
     name: '',
@@ -368,6 +374,32 @@ function FreeBookingContent() {
             </div>
           </div>
 
+          {/* 支払い方法確認チェック */}
+          {paymentType && (
+            <div className="card mb-6">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={paymentConfirmed}
+                  onChange={(e) => setPaymentConfirmed(e.target.checked)}
+                  className="w-5 h-5 mt-0.5 text-primary-500 border-accent-300 rounded focus:ring-primary-500 focus:ring-2"
+                />
+                <span className="text-accent-800">
+                  {paymentType === 'credit_card' 
+                    ? '支払い方法は「クレジットカード決済」となります。'
+                    : '支払い方法は「現金もしくはクレジットカード決済」となります。'
+                  }
+                  <span className="text-red-500 ml-1">*</span>
+                </span>
+              </label>
+              {!paymentConfirmed && (
+                <p className="text-sm text-red-500 mt-2 ml-8">
+                  予約を確定するには上記をご確認ください
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Error Message */}
           {error && (
             <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl">
@@ -391,8 +423,8 @@ function FreeBookingContent() {
             </button>
             <button
               onClick={handleSubmit}
-              disabled={submitting}
-              className="btn-primary w-full sm:w-1/2 order-1 sm:order-2 flex items-center justify-center gap-2"
+              disabled={submitting || (paymentType && !paymentConfirmed)}
+              className="btn-primary w-full sm:w-1/2 order-1 sm:order-2 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {submitting ? (
                 <>

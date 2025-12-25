@@ -435,15 +435,38 @@ def refresh_all_choice_schedule_cache(client: HacomonoClient, days: int = 14, st
     range_cached_count = 0
     errors = []
     
+    # 店舗ごとのプログラム一覧をキャッシュ（重複取得を避ける）
+    programs_by_studio: dict = {}
+    
     # 各ルームの完全なスケジュールをキャッシュ（range形式）
     for room in choice_rooms:
         room_id = room.get("id")
+        room_studio_id = room.get("studio_id")
+        
         try:
-            # range cacheを更新（program_id=Noneで基本データ）
+            # 1. program_id=Noneで基本データをキャッシュ
             refresh_choice_schedule_range_cache(client, room_id, date_from, date_to, program_id=None)
             range_cached_count += 1
-            cached_count += days  # 各日付分
-            logger.info(f"Refreshed range cache for room {room_id}: {date_from} to {date_to}")
+            cached_count += days
+            logger.info(f"Refreshed range cache for room {room_id}: {date_from} to {date_to} (program_id=none)")
+            
+            # 2. 店舗のプログラム一覧を取得（キャッシュ利用）
+            if room_studio_id not in programs_by_studio:
+                programs_by_studio[room_studio_id] = get_cached_programs(client, room_studio_id)
+            
+            programs = programs_by_studio.get(room_studio_id, [])
+            
+            # 3. 各プログラムIDでもキャッシュを作成
+            for program in programs:
+                program_id = program.get("id")
+                if program_id:
+                    try:
+                        refresh_choice_schedule_range_cache(client, room_id, date_from, date_to, program_id=program_id)
+                        range_cached_count += 1
+                        logger.debug(f"Refreshed range cache for room {room_id}: {date_from} to {date_to} (program_id={program_id})")
+                    except Exception as e:
+                        logger.warning(f"Failed to refresh cache for room {room_id} program {program_id}: {e}")
+            
         except Exception as e:
             errors.append({"room_id": room_id, "error": str(e)})
             logger.error(f"Failed to refresh range cache for room {room_id}: {e}")
@@ -1646,7 +1669,8 @@ def verify_hacomono_webhook_signature(body: bytes, x_webhook_event: str, secret:
             return False, f"Unsupported signature algorithm: {signature_algorithm}"
         
         # タイムスタンプの検証（5分以内のリクエストのみ受け付け）
-        current_time = int(datetime.utcnow().timestamp())
+        # hacomonoはJSTでタイムスタンプを送信するため、ローカル時刻で比較
+        current_time = int(datetime.now().timestamp())
         if abs(current_time - timestamp) > 300:  # 5分 = 300秒
             logger.warning(f"Webhook timestamp too old: {timestamp}, current: {current_time}")
             return False, "Timestamp too old (possible replay attack)"
@@ -3515,10 +3539,20 @@ def create_choice_reservation():
                 # まず既存キャッシュを無効化
                 reservation_date_for_cache = start_at.split(" ")[0]
                 invalidate_choice_schedule_cache(studio_room_id, reservation_date_for_cache)
-                # 今週と来週の両方をキャッシュ更新
-                refresh_choice_schedule_range_cache(bg_client, studio_room_id, week1_from, week1_to, program_id=None)
-                refresh_choice_schedule_range_cache(bg_client, studio_room_id, week2_from, week2_to, program_id=None)
-                logger.info(f"Cache refreshed (2 weeks) after reservation for room {studio_room_id}")
+                
+                # 店舗のプログラム一覧を取得
+                programs = get_cached_programs(bg_client, studio_id)
+                program_ids = [None] + [p.get("id") for p in programs if p.get("id")]
+                
+                # 今週と来週の両方を、各プログラムIDでキャッシュ更新
+                for pid in program_ids:
+                    try:
+                        refresh_choice_schedule_range_cache(bg_client, studio_room_id, week1_from, week1_to, program_id=pid)
+                        refresh_choice_schedule_range_cache(bg_client, studio_room_id, week2_from, week2_to, program_id=pid)
+                    except Exception as e:
+                        logger.warning(f"Failed to refresh cache for program {pid}: {e}")
+                
+                logger.info(f"Cache refreshed (2 weeks, {len(program_ids)} program variants) after reservation for room {studio_room_id}")
             except Exception as e:
                 logger.warning(f"Failed to refresh cache in background: {e}")
         

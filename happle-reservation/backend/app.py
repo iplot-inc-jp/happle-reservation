@@ -444,19 +444,34 @@ def refresh_all_choice_schedule_cache(client: HacomonoClient, days: int = 14, st
         room_studio_id = room.get("studio_id")
         
         try:
-            # 1. program_id=Noneで基本データをキャッシュ
-            refresh_choice_schedule_range_cache(client, room_id, date_from, date_to, program_id=None)
+            # 1. program_id=Noneで基本データをキャッシュし、studio_room_serviceを取得
+            schedule_data = refresh_choice_schedule_range_cache(client, room_id, date_from, date_to, program_id=None)
             range_cached_count += 1
             cached_count += days
             logger.info(f"Refreshed range cache for room {room_id}: {date_from} to {date_to} (program_id=none)")
             
-            # 2. 店舗のプログラム一覧を取得（キャッシュ利用）
+            # 2. studio_room_serviceから選択可能プログラムの情報を取得
+            # schedulesは日付をキーとする辞書
+            schedules_dict = schedule_data.get("schedules", {})
+            first_schedule = list(schedules_dict.values())[0] if schedules_dict else {}
+            studio_room_service = first_schedule.get("studio_room_service", {}) if first_schedule else {}
+            selectable_program_type = studio_room_service.get("selectable_program_type")
+            selectable_program_details = studio_room_service.get("selectable_program_details", [])
+            logger.info(f"Room {room_id}: selectable_program_type={selectable_program_type}, details count={len(selectable_program_details)}")
+            
+            # 3. 店舗の予約可能なプログラム一覧を取得（スタッフ・設備が紐づいているもののみ）
             if room_studio_id not in programs_by_studio:
-                programs_by_studio[room_studio_id] = get_cached_programs(client, room_studio_id)
+                programs_by_studio[room_studio_id] = get_reservable_programs(client, room_studio_id)
             
             programs = programs_by_studio.get(room_studio_id, [])
             
-            # 3. 各プログラムIDでもキャッシュを作成
+            # 4. ルームの selectable_program_details でさらにフィルタリング（SELECTEDの場合のみ）
+            if selectable_program_type == "SELECTED" and selectable_program_details:
+                selectable_program_ids = set(p.get("program_id") for p in selectable_program_details)
+                programs = [p for p in programs if p.get("id") in selectable_program_ids]
+                logger.debug(f"Filtered programs by selectable_program_details: {len(programs)} programs for room {room_id}")
+            
+            # 5. 各プログラムIDでもキャッシュを作成
             for program in programs:
                 program_id = program.get("id")
                 if program_id:
@@ -468,8 +483,9 @@ def refresh_all_choice_schedule_cache(client: HacomonoClient, days: int = 14, st
                         logger.warning(f"Failed to refresh cache for room {room_id} program {program_id}: {e}")
             
         except Exception as e:
+            import traceback
             errors.append({"room_id": room_id, "error": str(e)})
-            logger.error(f"Failed to refresh range cache for room {room_id}: {e}")
+            logger.error(f"Failed to refresh range cache for room {room_id}: {e}\n{traceback.format_exc()}")
     
     duration = (datetime.now() - start_time).total_seconds()
     
@@ -660,6 +676,73 @@ def get_cached_programs(client: HacomonoClient, studio_id: int = None) -> list:
         if cached_data is not None:
             return cached_data
         return []
+
+
+def has_selectable_instructors(program: dict) -> bool:
+    """プログラムにスタッフが紐づいているかチェック
+    
+    フロントエンドの hasSelectableInstructors と同じロジック
+    - 設定なし = 全スタッフから選択可能 → True
+    - ALL / RANDOM_ALL = 全スタッフから選択可能 → True
+    - SELECTED / FIXED / RANDOM_SELECTED で items.length > 0 → True
+    - SELECTED / FIXED / RANDOM_SELECTED で items.length === 0 → False
+    """
+    details = program.get("selectable_instructor_details", [])
+    if not details:
+        return True  # 設定なし = 全スタッフから選択可能
+    
+    first_detail = details[0]
+    detail_type = first_detail.get("type", "")
+    
+    if detail_type in ["ALL", "RANDOM_ALL"]:
+        return True  # 全スタッフから選択可能
+    
+    if detail_type in ["SELECTED", "FIXED", "RANDOM_SELECTED"]:
+        items = first_detail.get("items", [])
+        return len(items) > 0
+    
+    return True
+
+
+def has_selectable_resources(program: dict) -> bool:
+    """プログラムに設備が紐づいているかチェック
+    
+    フロントエンドの hasSelectableResources と同じロジック
+    - 設定なし = 設備が紐づいていない → False
+    - ALL / RANDOM_ALL = 明示的に紐づいていない → False
+    - 全ての設定で SELECTED / FIXED / RANDOM_SELECTED かつ items.length > 0 → True
+    """
+    details = program.get("selectable_resource_details", [])
+    if not details:
+        return False  # 設定なし = 設備が紐づいていない
+    
+    # 全ての設定で少なくとも1つの設備が紐づいているかチェック
+    for detail in details:
+        detail_type = detail.get("type", "")
+        
+        if detail_type in ["ALL", "RANDOM_ALL"]:
+            return False  # 全設備から選択 = 明示的に紐づいていない
+        
+        if detail_type in ["SELECTED", "FIXED", "RANDOM_SELECTED"]:
+            items = detail.get("items", [])
+            if len(items) == 0:
+                return False
+    
+    return True
+
+
+def is_program_fully_configured(program: dict) -> bool:
+    """プログラムが予約可能か判定（スタッフと設備が紐づいているか）
+    
+    フロントエンドの isProgramFullyConfigured と同じロジック
+    """
+    return has_selectable_instructors(program) and has_selectable_resources(program)
+
+
+def get_reservable_programs(client: HacomonoClient, studio_id: int) -> list:
+    """予約可能なプログラム一覧を取得（スタッフと設備が紐づいているもののみ）"""
+    programs = get_cached_programs(client, studio_id)
+    return [p for p in programs if is_program_fully_configured(p)]
 
 
 def get_cached_studio_rooms(client: HacomonoClient, studio_id: int = None) -> list:
@@ -3540,19 +3623,45 @@ def create_choice_reservation():
                 reservation_date_for_cache = start_at.split(" ")[0]
                 invalidate_choice_schedule_cache(studio_room_id, reservation_date_for_cache)
                 
-                # 店舗のプログラム一覧を取得
-                programs = get_cached_programs(bg_client, studio_id)
-                program_ids = [None] + [p.get("id") for p in programs if p.get("id")]
+                # 今週の基本データをキャッシュし、studio_room_serviceを取得
+                schedule_data = refresh_choice_schedule_range_cache(bg_client, studio_room_id, week1_from, week1_to, program_id=None)
                 
-                # 今週と来週の両方を、各プログラムIDでキャッシュ更新
-                for pid in program_ids:
-                    try:
-                        refresh_choice_schedule_range_cache(bg_client, studio_room_id, week1_from, week1_to, program_id=pid)
-                        refresh_choice_schedule_range_cache(bg_client, studio_room_id, week2_from, week2_to, program_id=pid)
-                    except Exception as e:
-                        logger.warning(f"Failed to refresh cache for program {pid}: {e}")
+                # studio_room_serviceから選択可能プログラムの情報を取得
+                # schedulesは日付をキーとする辞書
+                schedules_dict = schedule_data.get("schedules", {})
+                first_schedule = list(schedules_dict.values())[0] if schedules_dict else {}
+                studio_room_service = first_schedule.get("studio_room_service", {}) if first_schedule else {}
+                selectable_program_type = studio_room_service.get("selectable_program_type")
+                selectable_program_details = studio_room_service.get("selectable_program_details", [])
                 
-                logger.info(f"Cache refreshed (2 weeks, {len(program_ids)} program variants) after reservation for room {studio_room_id}")
+                # 店舗の予約可能なプログラム一覧を取得（スタッフ・設備が紐づいているもののみ）
+                programs = get_reservable_programs(bg_client, studio_id)
+                
+                # ルームの selectable_program_details でさらにフィルタリング（SELECTEDの場合のみ）
+                if selectable_program_type == "SELECTED" and selectable_program_details:
+                    selectable_program_ids = set(p.get("program_id") for p in selectable_program_details)
+                    programs = [p for p in programs if p.get("id") in selectable_program_ids]
+                
+                # 各プログラムIDでキャッシュ更新（今週分）
+                for program in programs:
+                    pid = program.get("id")
+                    if pid:
+                        try:
+                            refresh_choice_schedule_range_cache(bg_client, studio_room_id, week1_from, week1_to, program_id=pid)
+                        except Exception as e:
+                            logger.warning(f"Failed to refresh cache for program {pid}: {e}")
+                
+                # 来週分も同様にキャッシュ（基本データ + 各プログラムID）
+                refresh_choice_schedule_range_cache(bg_client, studio_room_id, week2_from, week2_to, program_id=None)
+                for program in programs:
+                    pid = program.get("id")
+                    if pid:
+                        try:
+                            refresh_choice_schedule_range_cache(bg_client, studio_room_id, week2_from, week2_to, program_id=pid)
+                        except Exception as e:
+                            logger.warning(f"Failed to refresh cache for program {pid}: {e}")
+                
+                logger.info(f"Cache refreshed (2 weeks, {len(programs) + 1} program variants) after reservation for room {studio_room_id}")
             except Exception as e:
                 logger.warning(f"Failed to refresh cache in background: {e}")
         

@@ -90,7 +90,7 @@ STUDIO_ROOMS_CACHE_TTL_SECONDS = 300  # 5分間キャッシュ
 # 自由枠スケジュールキャッシュ（room_id + date ごと）- 短時間キャッシュ
 _choice_schedule_cache: dict = {}  # { "room_id:date": schedule }
 _choice_schedule_cache_time: dict = {}  # { "room_id:date": datetime }
-CHOICE_SCHEDULE_CACHE_TTL_SECONDS = 30  # 30秒間キャッシュ（予約状況は変わりやすい）
+CHOICE_SCHEDULE_CACHE_TTL_SECONDS = 900  # 15分間キャッシュ（GitHub Actions cronと同期）
 
 
 # ==================== キャッシュ操作関数 ====================

@@ -388,11 +388,12 @@ def refresh_choice_schedule_range_cache(client: HacomonoClient, studio_room_id: 
 def refresh_all_choice_schedule_cache(client: HacomonoClient, days: int = 14, studio_ids: list = None) -> dict:
     """指定したstudio_roomの完全なスケジュールをキャッシュにロード
     
-    choice-schedule-range形式で完全なデータをキャッシュ（フロントエンドと同じ形式）
+    フロントエンドは今週(0-6日)と来週(7-13日)を別々にリクエストするため、
+    両方の範囲をキャッシュする
     
     Args:
         client: hacomono APIクライアント
-        days: キャッシュする日数（デフォルト14日）
+        days: キャッシュする日数（デフォルト14日、7日刻みで分割）
         studio_ids: 対象の店舗IDリスト（Noneの場合は全店舗）
     
     Returns:
@@ -424,9 +425,17 @@ def refresh_all_choice_schedule_cache(client: HacomonoClient, days: int = 14, st
         }
     
     today = datetime.now()
-    date_from = today.strftime("%Y-%m-%d")
-    date_to = (today + timedelta(days=days-1)).strftime("%Y-%m-%d")
-    dates = [(today + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
+    
+    # フロントエンドの週単位リクエストに合わせて7日刻みの範囲を生成
+    # 例: days=14 → [(0-6), (7-13)]、days=7 → [(0-6)]
+    week_ranges = []
+    for week_start in range(0, days, 7):
+        week_end = min(week_start + 6, days - 1)
+        week_from = (today + timedelta(days=week_start)).strftime("%Y-%m-%d")
+        week_to = (today + timedelta(days=week_end)).strftime("%Y-%m-%d")
+        week_ranges.append((week_from, week_to))
+    
+    logger.info(f"Will cache {len(week_ranges)} week ranges: {week_ranges}")
     
     cached_count = 0
     range_cached_count = 0
@@ -435,15 +444,16 @@ def refresh_all_choice_schedule_cache(client: HacomonoClient, days: int = 14, st
     # 各ルームの完全なスケジュールをキャッシュ（range形式）
     for room in choice_rooms:
         room_id = room.get("id")
-        try:
-            # range cacheを更新（program_id=Noneで基本データ）
-            refresh_choice_schedule_range_cache(client, room_id, date_from, date_to, program_id=None)
-            range_cached_count += 1
-            cached_count += days  # 各日付分
-            logger.info(f"Refreshed range cache for room {room_id}: {date_from} to {date_to}")
-        except Exception as e:
-            errors.append({"room_id": room_id, "error": str(e)})
-            logger.error(f"Failed to refresh range cache for room {room_id}: {e}")
+        for week_from, week_to in week_ranges:
+            try:
+                # 各週の範囲をキャッシュ
+                refresh_choice_schedule_range_cache(client, room_id, week_from, week_to, program_id=None)
+                range_cached_count += 1
+                cached_count += 7  # 7日分
+                logger.info(f"Refreshed range cache for room {room_id}: {week_from} to {week_to}")
+            except Exception as e:
+                errors.append({"room_id": room_id, "range": f"{week_from}~{week_to}", "error": str(e)})
+                logger.error(f"Failed to refresh range cache for room {room_id} ({week_from}~{week_to}): {e}")
     
     duration = (datetime.now() - start_time).total_seconds()
     
@@ -3344,10 +3354,15 @@ def create_choice_reservation():
     
     # キャッシュをリフレッシュ（予約が入った日のスケジュールを更新）
     # 次のユーザーも高速にアクセスできるように、無効化ではなくリフレッシュする
+    # フロントエンドは今週(0-6日)と来週(7-13日)の2つの範囲を別々にリクエストする
     try:
         today = datetime.now()
-        date_from = today.strftime("%Y-%m-%d")
-        date_to = (today + timedelta(days=6)).strftime("%Y-%m-%d")  # 7日分（フロントエンド表示と同じ）
+        # 今週: today ~ today+6
+        week1_from = today.strftime("%Y-%m-%d")
+        week1_to = (today + timedelta(days=6)).strftime("%Y-%m-%d")
+        # 来週: today+7 ~ today+13
+        week2_from = (today + timedelta(days=7)).strftime("%Y-%m-%d")
+        week2_to = (today + timedelta(days=13)).strftime("%Y-%m-%d")
         
         # バックグラウンドでキャッシュをリフレッシュ（レスポンスを遅らせないため）
         def refresh_cache_background():
@@ -3356,9 +3371,10 @@ def create_choice_reservation():
                 # まず既存キャッシュを無効化
                 reservation_date_for_cache = start_at.split(" ")[0]
                 invalidate_choice_schedule_cache(studio_room_id, reservation_date_for_cache)
-                # 新しいデータでキャッシュを更新
-                refresh_choice_schedule_range_cache(bg_client, studio_room_id, date_from, date_to, program_id=None)
-                logger.info(f"Cache refreshed after reservation for room {studio_room_id}")
+                # 今週と来週の両方をキャッシュ更新
+                refresh_choice_schedule_range_cache(bg_client, studio_room_id, week1_from, week1_to, program_id=None)
+                refresh_choice_schedule_range_cache(bg_client, studio_room_id, week2_from, week2_to, program_id=None)
+                logger.info(f"Cache refreshed (2 weeks) after reservation for room {studio_room_id}")
             except Exception as e:
                 logger.warning(f"Failed to refresh cache in background: {e}")
         

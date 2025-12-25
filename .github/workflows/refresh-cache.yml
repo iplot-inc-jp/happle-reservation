@@ -8,9 +8,9 @@ on:
     # 手動実行も可能
     inputs:
       days:
-        description: 'Number of days to cache (default: 7)'
+        description: 'Number of days to cache (default: 14, split into 7-day ranges)'
         required: false
-        default: '7'
+        default: '14'
         type: string
       studio_ids:
         description: 'Target studio IDs (comma-separated, e.g., 4,5,6). Empty = all studios'
@@ -26,7 +26,7 @@ jobs:
     steps:
       - name: Refresh cache
         run: |
-          DAYS="${{ github.event.inputs.days || '7' }}"
+          DAYS="${{ github.event.inputs.days || '14' }}"
           STUDIO_IDS="${{ github.event.inputs.studio_ids || '4' }}"
           
           echo "Refreshing cache for ${DAYS} days, studio_ids=${STUDIO_IDS}..."

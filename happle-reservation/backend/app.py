@@ -144,8 +144,251 @@ def invalidate_choice_schedule_cache(studio_room_id: int, date: str) -> bool:
     return invalidated
 
 
+def refresh_choice_schedule_range_cache(client: HacomonoClient, studio_room_id: int, date_from: str, date_to: str, program_id: int = None) -> dict:
+    """choice-schedule-range のキャッシュを更新（内部用）
+    
+    Args:
+        client: hacomono APIクライアント
+        studio_room_id: スタジオルームID
+        date_from: 開始日（YYYY-MM-DD）
+        date_to: 終了日（YYYY-MM-DD）
+        program_id: プログラムID（オプション）
+    
+    Returns:
+        dict: キャッシュされたデータ
+    """
+    global _choice_schedule_range_cache, _choice_schedule_range_cache_time
+    
+    cache_key = f"{studio_room_id}:{date_from}:{date_to}:{program_id or 'none'}"
+    
+    # 日付リストを生成
+    start_date = datetime.strptime(date_from, "%Y-%m-%d")
+    end_date = datetime.strptime(date_to, "%Y-%m-%d")
+    dates = []
+    current = start_date
+    while current <= end_date:
+        dates.append(current.strftime("%Y-%m-%d"))
+        current += timedelta(days=1)
+    
+    # 1. スタッフのスタジオ紐付け情報を取得
+    instructor_studio_map = get_cached_instructor_studio_map(client)
+    
+    # 2. 各日付のchoice/scheduleを並列取得
+    schedules = {}
+    actual_studio_id = None
+    
+    def fetch_schedule(date: str):
+        try:
+            schedule = get_cached_choice_schedule(client, studio_room_id, date)
+            return date, {
+                "studio_room_service": schedule.get("studio_room_service"),
+                "shift": schedule.get("shift"),
+                "shift_studio_business_hour": schedule.get("shift_studio_business_hour", []),
+                "shift_instructor": schedule.get("shift_instructor", []),
+                "reservation_assign_instructor": list(schedule.get("reservation_assign_instructor", [])),
+                "reservation_assign_resource": list(schedule.get("reservation_assign_resource", []))
+            }
+        except Exception as e:
+            logger.warning(f"Failed to get schedule for {date}: {e}")
+            return date, None
+    
+    with ThreadPoolExecutor(max_workers=7) as executor:
+        futures = {executor.submit(fetch_schedule, date): date for date in dates}
+        for future in as_completed(futures):
+            date, schedule_data = future.result()
+            schedules[date] = schedule_data
+            if schedule_data and not actual_studio_id:
+                studio_room = schedule_data.get("studio_room_service", {})
+                actual_studio_id = studio_room.get("studio_id") if studio_room else None
+    
+    # 3. 固定枠レッスンを範囲全体で1回だけ取得
+    fixed_slot_lessons_by_date = {date: [] for date in dates}
+    fixed_slot_reservations_by_date = {date: [] for date in dates}
+    
+    if actual_studio_id:
+        try:
+            lessons_response = client.get_studio_lessons(
+                query={"studio_id": actual_studio_id},
+                date_from=date_from,
+                date_to=date_to,
+                fetch_all=True
+            )
+            lessons = lessons_response.get("data", {}).get("studio_lessons", {}).get("list", [])
+            
+            for lesson in lessons:
+                start_at_str = lesson.get("start_at")
+                if not start_at_str:
+                    continue
+                lesson_date = start_at_str[:10]
+                if lesson_date not in fixed_slot_lessons_by_date:
+                    continue
+                
+                fixed_slot_lessons_by_date[lesson_date].append({
+                    "id": lesson.get("id"),
+                    "start_at": lesson.get("start_at"),
+                    "end_at": lesson.get("end_at"),
+                    "instructor_id": lesson.get("instructor_id"),
+                    "instructor_ids": lesson.get("instructor_ids", []),
+                    "program_id": lesson.get("program_id"),
+                    "studio_id": lesson.get("studio_id"),
+                    "capacity": lesson.get("capacity", 0)
+                })
+                
+                instructor_ids = lesson.get("instructor_ids", [])
+                if not instructor_ids and lesson.get("instructor_id"):
+                    instructor_ids = [lesson.get("instructor_id")]
+                
+                end_at_str = lesson.get("end_at")
+                if not end_at_str:
+                    continue
+                
+                for instructor_id in instructor_ids:
+                    if instructor_id:
+                        try:
+                            start_at = datetime.fromisoformat(start_at_str.replace("Z", "+00:00"))
+                            end_at = datetime.fromisoformat(end_at_str.replace("Z", "+00:00"))
+                            blocked_start = start_at - timedelta(minutes=FIXED_SLOT_BEFORE_INTERVAL_MINUTES)
+                            blocked_end = end_at + timedelta(minutes=FIXED_SLOT_AFTER_INTERVAL_MINUTES)
+                            
+                            fixed_slot_reservations_by_date[lesson_date].append({
+                                "entity_id": instructor_id,
+                                "entity_type": "INSTRUCTOR",
+                                "start_at": blocked_start.isoformat(),
+                                "end_at": blocked_end.isoformat(),
+                                "type": "FIXED_SLOT_LESSON"
+                            })
+                        except Exception as e:
+                            logger.warning(f"Failed to parse lesson time: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to get fixed slot lessons: {e}")
+    
+    # 4. 予定ブロックを各日付ごとに並列取得
+    shift_slots_by_date = {date: [] for date in dates}
+    shift_slot_reservations_by_date = {date: [] for date in dates}
+    resource_shift_slot_reservations_by_date = {date: [] for date in dates}
+    
+    if actual_studio_id:
+        def fetch_shift_slots(date: str):
+            try:
+                shift_slots_response = client.get_shift_slots({"studio_id": actual_studio_id, "date": date})
+                shift_slots_data = shift_slots_response.get("data", {}).get("shift_slots", {})
+                shift_slots = shift_slots_data.get("list", []) if isinstance(shift_slots_data, dict) else shift_slots_data
+                
+                instructor_reservations = []
+                resource_reservations = []
+                
+                for slot in shift_slots:
+                    entity_type = slot.get("entity_type", "").upper()
+                    if entity_type == "INSTRUCTOR":
+                        instructor_reservations.append({
+                            "entity_id": slot.get("entity_id"),
+                            "entity_type": "INSTRUCTOR",
+                            "start_at": slot.get("start_at"),
+                            "end_at": slot.get("end_at"),
+                            "reservation_type": "SHIFT_SLOT",
+                            "title": slot.get("title", ""),
+                            "description": slot.get("description", "")
+                        })
+                    elif entity_type == "RESOURCE":
+                        resource_reservations.append({
+                            "entity_id": slot.get("entity_id"),
+                            "entity_type": "RESOURCE",
+                            "start_at": slot.get("start_at"),
+                            "end_at": slot.get("end_at"),
+                            "reservation_type": "SHIFT_SLOT",
+                            "title": slot.get("title", ""),
+                            "description": slot.get("description", "")
+                        })
+                
+                return date, shift_slots, instructor_reservations, resource_reservations
+            except Exception as e:
+                logger.warning(f"Failed to get shift slots for {date}: {e}")
+                return date, [], [], []
+        
+        with ThreadPoolExecutor(max_workers=7) as executor:
+            futures = {executor.submit(fetch_shift_slots, date): date for date in dates}
+            for future in as_completed(futures):
+                date, shift_slots, instructor_res, resource_res = future.result()
+                shift_slots_by_date[date] = shift_slots
+                shift_slot_reservations_by_date[date] = instructor_res
+                resource_shift_slot_reservations_by_date[date] = resource_res
+    
+    # 5. 設備情報を取得
+    resources_info = get_cached_resources(client, actual_studio_id)
+    
+    # 6. プログラムの予約数を日付範囲全体で取得
+    program_reservation_counts = {date: 0 for date in dates}
+    if program_id:
+        try:
+            reservations_response = client.get_reservations({
+                "program_id": program_id,
+                "date_from": date_from,
+                "date_to": date_to
+            })
+            reservations_data = reservations_response.get("data", {}).get("reservations", {})
+            reservations_list = reservations_data.get("list", []) if isinstance(reservations_data, dict) else reservations_data or []
+            
+            for reservation in reservations_list:
+                start_at = reservation.get("start_at", "")
+                if start_at:
+                    res_date = start_at[:10]
+                    if res_date in program_reservation_counts:
+                        program_reservation_counts[res_date] += 1
+        except Exception as e:
+            logger.warning(f"Failed to get program reservations: {e}")
+    
+    # 7. 結果を統合
+    result_schedules = {}
+    for date in dates:
+        schedule = schedules.get(date)
+        if schedule:
+            all_instructor_reservations = list(schedule.get("reservation_assign_instructor", []))
+            all_instructor_reservations.extend(fixed_slot_reservations_by_date.get(date, []))
+            all_instructor_reservations.extend(shift_slot_reservations_by_date.get(date, []))
+            
+            all_resource_reservations = list(schedule.get("reservation_assign_resource", []))
+            all_resource_reservations.extend(resource_shift_slot_reservations_by_date.get(date, []))
+            
+            result_schedules[date] = {
+                "date": date,
+                "studio_id": actual_studio_id,
+                "studio_room_service": schedule.get("studio_room_service"),
+                "shift": schedule.get("shift"),
+                "shift_studio_business_hour": schedule.get("shift_studio_business_hour", []),
+                "shift_instructor": schedule.get("shift_instructor", []),
+                "reservation_assign_instructor": all_instructor_reservations,
+                "reservation_assign_resource": all_resource_reservations,
+                "resources_info": resources_info,
+                "fixed_slot_lessons": fixed_slot_lessons_by_date.get(date, []),
+                "fixed_slot_interval": {
+                    "before_minutes": FIXED_SLOT_BEFORE_INTERVAL_MINUTES,
+                    "after_minutes": FIXED_SLOT_AFTER_INTERVAL_MINUTES
+                },
+                "instructor_studio_map": instructor_studio_map,
+                "shift_slots": shift_slots_by_date.get(date, []),
+                "program_reservation_count": program_reservation_counts.get(date, 0)
+            }
+        else:
+            result_schedules[date] = None
+    
+    response_data = {
+        "schedules": result_schedules,
+        "date_from": date_from,
+        "date_to": date_to
+    }
+    
+    # キャッシュに保存
+    _choice_schedule_range_cache[cache_key] = response_data
+    _choice_schedule_range_cache_time[cache_key] = datetime.now()
+    logger.info(f"Cached choice-schedule-range for {cache_key}")
+    
+    return response_data
+
+
 def refresh_all_choice_schedule_cache(client: HacomonoClient, days: int = 14, studio_ids: list = None) -> dict:
-    """指定したstudio_roomの指定日数分のchoice_scheduleをキャッシュにロード
+    """指定したstudio_roomの完全なスケジュールをキャッシュにロード
+    
+    choice-schedule-range形式で完全なデータをキャッシュ（フロントエンドと同じ形式）
     
     Args:
         client: hacomono APIクライアント
@@ -162,7 +405,6 @@ def refresh_all_choice_schedule_cache(client: HacomonoClient, days: int = 14, st
     # 全スタジオルームを取得
     rooms = get_cached_studio_rooms(client)
     # 自由枠（CHOICE）のルームのみを対象
-    # reservation_typeは文字列 "CHOICE" または数値 2 の場合がある
     choice_rooms = [r for r in rooms if r.get("reservation_type") in ["CHOICE", 2]]
     
     # studio_idsが指定されている場合、対象店舗のルームのみにフィルタリング
@@ -177,36 +419,31 @@ def refresh_all_choice_schedule_cache(client: HacomonoClient, days: int = 14, st
             "rooms_count": 0,
             "dates_count": days,
             "total_cached": 0,
+            "range_cached": 0,
             "duration_seconds": 0
         }
     
     today = datetime.now()
+    date_from = today.strftime("%Y-%m-%d")
+    date_to = (today + timedelta(days=days-1)).strftime("%Y-%m-%d")
     dates = [(today + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
     
     cached_count = 0
+    range_cached_count = 0
     errors = []
     
-    # 並列で全room x 全dateのスケジュールを取得
-    def fetch_schedule(room_id: int, date: str) -> tuple:
+    # 各ルームの完全なスケジュールをキャッシュ（range形式）
+    for room in choice_rooms:
+        room_id = room.get("id")
         try:
-            schedule = get_cached_choice_schedule(client, room_id, date)
-            return (room_id, date, True, None)
+            # range cacheを更新（program_id=Noneで基本データ）
+            refresh_choice_schedule_range_cache(client, room_id, date_from, date_to, program_id=None)
+            range_cached_count += 1
+            cached_count += days  # 各日付分
+            logger.info(f"Refreshed range cache for room {room_id}: {date_from} to {date_to}")
         except Exception as e:
-            return (room_id, date, False, str(e))
-    
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = []
-        for room in choice_rooms:
-            room_id = room.get("id")
-            for date in dates:
-                futures.append(executor.submit(fetch_schedule, room_id, date))
-        
-        for future in as_completed(futures):
-            room_id, date, success, error = future.result()
-            if success:
-                cached_count += 1
-            else:
-                errors.append({"room_id": room_id, "date": date, "error": error})
+            errors.append({"room_id": room_id, "error": str(e)})
+            logger.error(f"Failed to refresh range cache for room {room_id}: {e}")
     
     duration = (datetime.now() - start_time).total_seconds()
     
@@ -219,14 +456,15 @@ def refresh_all_choice_schedule_cache(client: HacomonoClient, days: int = 14, st
         "rooms_count": len(choice_rooms),
         "dates_count": days,
         "total_cached": cached_count,
+        "range_cached": range_cached_count,
         "errors_count": len(errors),
         "duration_seconds": round(duration, 2)
     }
     
     if errors:
-        result["errors"] = errors[:10]  # 最大10件のエラーを返す
+        result["errors"] = errors[:10]
     
-    logger.info(f"Cache refresh completed: {cached_count} schedules cached in {duration:.2f}s for studio_ids={studio_ids}")
+    logger.info(f"Cache refresh completed: {range_cached_count} ranges cached in {duration:.2f}s for studio_ids={studio_ids}")
     
     return result
 
@@ -3450,15 +3688,14 @@ def get_choice_schedule_range():
     """自由枠予約スケジュールを日付範囲で一括取得（最適化版）
     
     7日分のスケジュールを1回のリクエストで取得。
-    studio-lessonsは範囲全体で1回だけ取得し、instructor_studio_mapはキャッシュを使用。
     完全なレスポンスをキャッシュして高速化。
     """
     global _choice_schedule_range_cache, _choice_schedule_range_cache_time
     
     studio_room_id = request.args.get("studio_room_id", type=int)
-    program_id = request.args.get("program_id", type=int)  # プログラムID（1日上限チェック用）
-    date_from = request.args.get("date_from")  # YYYY-MM-DD
-    date_to = request.args.get("date_to")  # YYYY-MM-DD
+    program_id = request.args.get("program_id", type=int)
+    date_from = request.args.get("date_from")
+    date_to = request.args.get("date_to")
     
     if not studio_room_id:
         return jsonify({"error": "Missing required parameter: studio_room_id"}), 400
@@ -3467,7 +3704,6 @@ def get_choice_schedule_range():
         date_from = datetime.now().strftime("%Y-%m-%d")
     
     if not date_to:
-        # date_fromから7日後をデフォルトに
         date_to = (datetime.strptime(date_from, "%Y-%m-%d") + timedelta(days=6)).strftime("%Y-%m-%d")
     
     # キャッシュキーを生成
@@ -3484,248 +3720,13 @@ def get_choice_schedule_range():
         logger.debug(f"Using cached choice-schedule-range for {cache_key}")
         return jsonify(cached_data)
     
-    # キャッシュミス - APIから取得
+    # キャッシュミス - refresh関数を使用
     client = get_hacomono_client()
     
     try:
-        # 日付リストを生成
-        start_date = datetime.strptime(date_from, "%Y-%m-%d")
-        end_date = datetime.strptime(date_to, "%Y-%m-%d")
-        dates = []
-        current = start_date
-        while current <= end_date:
-            dates.append(current.strftime("%Y-%m-%d"))
-            current += timedelta(days=1)
-        
-        # 1. スタッフのスタジオ紐付け情報を取得（キャッシュ使用）
-        instructor_studio_map = get_cached_instructor_studio_map(client)
-        
-        # 2. 各日付のchoice/scheduleを並列取得（高速化）
-        schedules = {}
-        actual_studio_id = None
-        
-        def fetch_schedule(date: str):
-            """単一日付のスケジュールを取得（30秒間キャッシュ）"""
-            try:
-                # キャッシュから取得
-                schedule = get_cached_choice_schedule(client, studio_room_id, date)
-                return date, {
-                    "studio_room_service": schedule.get("studio_room_service"),
-                    "shift": schedule.get("shift"),
-                    "shift_studio_business_hour": schedule.get("shift_studio_business_hour", []),
-                    "shift_instructor": schedule.get("shift_instructor", []),
-                    "reservation_assign_instructor": list(schedule.get("reservation_assign_instructor", [])),
-                    "reservation_assign_resource": list(schedule.get("reservation_assign_resource", []))
-                }
-            except Exception as e:
-                logger.warning(f"Failed to get schedule for {date}: {e}")
-                return date, None
-        
-        # ThreadPoolExecutorで並列取得（最大7スレッド）
-        with ThreadPoolExecutor(max_workers=7) as executor:
-            futures = {executor.submit(fetch_schedule, date): date for date in dates}
-            for future in as_completed(futures):
-                date, schedule_data = future.result()
-                schedules[date] = schedule_data
-                # studio_idを取得（最初の有効なレスポンスから）
-                if schedule_data and not actual_studio_id:
-                    studio_room = schedule_data.get("studio_room_service", {})
-                    actual_studio_id = studio_room.get("studio_id") if studio_room else None
-        
-        # 3. 固定枠レッスンを範囲全体で1回だけ取得
-        fixed_slot_lessons_by_date = {date: [] for date in dates}
-        fixed_slot_reservations_by_date = {date: [] for date in dates}
-        
-        if actual_studio_id:
-            try:
-                lessons_response = client.get_studio_lessons(
-                    query={"studio_id": actual_studio_id},
-                    date_from=date_from,
-                    date_to=date_to,
-                    fetch_all=True
-                )
-                lessons = lessons_response.get("data", {}).get("studio_lessons", {}).get("list", [])
-                logger.info(f"Fetched {len(lessons)} fixed slot lessons for range {date_from} to {date_to}")
-                
-                for lesson in lessons:
-                    start_at_str = lesson.get("start_at")
-                    if not start_at_str:
-                        continue
-                    
-                    # レッスンの日付を取得
-                    lesson_date = start_at_str[:10]  # YYYY-MM-DD
-                    if lesson_date not in fixed_slot_lessons_by_date:
-                        continue
-                    
-                    fixed_slot_lessons_by_date[lesson_date].append({
-                        "id": lesson.get("id"),
-                        "start_at": lesson.get("start_at"),
-                        "end_at": lesson.get("end_at"),
-                        "instructor_id": lesson.get("instructor_id"),
-                        "instructor_ids": lesson.get("instructor_ids", []),
-                        "program_id": lesson.get("program_id"),
-                        "studio_id": lesson.get("studio_id"),
-                        "capacity": lesson.get("capacity", 0)
-                    })
-                    
-                    # 固定枠レッスンの担当スタッフを予約として追加
-                    instructor_ids = lesson.get("instructor_ids", [])
-                    if not instructor_ids and lesson.get("instructor_id"):
-                        instructor_ids = [lesson.get("instructor_id")]
-                    
-                    end_at_str = lesson.get("end_at")
-                    if not end_at_str:
-                        continue
-                    
-                    for instructor_id in instructor_ids:
-                        if instructor_id:
-                            try:
-                                start_at = datetime.fromisoformat(start_at_str.replace("Z", "+00:00"))
-                                end_at = datetime.fromisoformat(end_at_str.replace("Z", "+00:00"))
-                                
-                                blocked_start = start_at - timedelta(minutes=FIXED_SLOT_BEFORE_INTERVAL_MINUTES)
-                                blocked_end = end_at + timedelta(minutes=FIXED_SLOT_AFTER_INTERVAL_MINUTES)
-                                
-                                fixed_slot_reservations_by_date[lesson_date].append({
-                                    "entity_id": instructor_id,
-                                    "entity_type": "INSTRUCTOR",
-                                    "start_at": blocked_start.isoformat(),
-                                    "end_at": blocked_end.isoformat(),
-                                    "type": "FIXED_SLOT_LESSON"
-                                })
-                            except Exception as e:
-                                logger.warning(f"Failed to parse lesson time: {e}")
-            except Exception as e:
-                logger.warning(f"Failed to get fixed slot lessons for range: {e}")
-        
-        # 4. 予定ブロック（休憩ブロック）を各日付ごとに並列取得（高速化）
-        shift_slots_by_date = {date: [] for date in dates}
-        shift_slot_reservations_by_date = {date: [] for date in dates}
-        resource_shift_slot_reservations_by_date = {date: [] for date in dates}
-        
-        if actual_studio_id:
-            def fetch_shift_slots(date: str):
-                """単一日付の予定ブロックを取得"""
-                try:
-                    shift_slots_response = client.get_shift_slots({"studio_id": actual_studio_id, "date": date})
-                    shift_slots_data = shift_slots_response.get("data", {}).get("shift_slots", {})
-                    shift_slots = shift_slots_data.get("list", []) if isinstance(shift_slots_data, dict) else shift_slots_data
-                    
-                    instructor_reservations = []
-                    resource_reservations = []
-                    
-                    for slot in shift_slots:
-                        entity_type = slot.get("entity_type", "").upper()
-                        if entity_type == "INSTRUCTOR":
-                            instructor_reservations.append({
-                                "entity_id": slot.get("entity_id"),
-                                "entity_type": "INSTRUCTOR",
-                                "start_at": slot.get("start_at"),
-                                "end_at": slot.get("end_at"),
-                                "reservation_type": "SHIFT_SLOT",
-                                "title": slot.get("title", ""),
-                                "description": slot.get("description", "")
-                            })
-                        elif entity_type == "RESOURCE":
-                            resource_reservations.append({
-                                "entity_id": slot.get("entity_id"),
-                                "entity_type": "RESOURCE",
-                                "start_at": slot.get("start_at"),
-                                "end_at": slot.get("end_at"),
-                                "reservation_type": "SHIFT_SLOT",
-                                "title": slot.get("title", ""),
-                                "description": slot.get("description", "")
-                            })
-                    
-                    return date, shift_slots, instructor_reservations, resource_reservations
-                except Exception as e:
-                    logger.warning(f"Failed to get shift slots for {date}: {e}")
-                    return date, [], [], []
-            
-            # ThreadPoolExecutorで並列取得
-            with ThreadPoolExecutor(max_workers=7) as executor:
-                futures = {executor.submit(fetch_shift_slots, date): date for date in dates}
-                for future in as_completed(futures):
-                    date, shift_slots, instructor_res, resource_res = future.result()
-                    shift_slots_by_date[date] = shift_slots
-                    shift_slot_reservations_by_date[date] = instructor_res
-                    resource_shift_slot_reservations_by_date[date] = resource_res
-        
-        # 5. 設備情報を取得（同時予約可能数を含む）
-        resources_info = get_cached_resources(client, actual_studio_id)
-        
-        # 6. プログラムの予約数を日付範囲全体で取得
-        program_reservation_counts = {date: 0 for date in dates}
-        if program_id:
-            try:
-                reservations_response = client.get_reservations({
-                    "program_id": program_id,
-                    "date_from": date_from,
-                    "date_to": date_to
-                })
-                reservations_data = reservations_response.get("data", {}).get("reservations", {})
-                reservations_list = reservations_data.get("list", []) if isinstance(reservations_data, dict) else reservations_data or []
-                
-                # 日付ごとに集計
-                for reservation in reservations_list:
-                    start_at = reservation.get("start_at", "")
-                    if start_at:
-                        res_date = start_at[:10]  # YYYY-MM-DD
-                        if res_date in program_reservation_counts:
-                            program_reservation_counts[res_date] += 1
-                
-                logger.info(f"Program {program_id} reservations: {program_reservation_counts}")
-            except Exception as e:
-                logger.warning(f"Failed to get program reservations: {e}")
-        
-        # 7. 結果を統合
-        result_schedules = {}
-        for date in dates:
-            schedule = schedules.get(date)
-            if schedule:
-                # スタッフの予約情報に固定枠と予定ブロックを統合
-                all_instructor_reservations = list(schedule.get("reservation_assign_instructor", []))
-                all_instructor_reservations.extend(fixed_slot_reservations_by_date.get(date, []))
-                all_instructor_reservations.extend(shift_slot_reservations_by_date.get(date, []))
-                
-                # 設備の予約情報に予定ブロックを統合
-                all_resource_reservations = list(schedule.get("reservation_assign_resource", []))
-                all_resource_reservations.extend(resource_shift_slot_reservations_by_date.get(date, []))
-                
-                result_schedules[date] = {
-                    "date": date,
-                    "studio_id": actual_studio_id,
-                    "studio_room_service": schedule.get("studio_room_service"),
-                    "shift": schedule.get("shift"),
-                    "shift_studio_business_hour": schedule.get("shift_studio_business_hour", []),
-                    "shift_instructor": schedule.get("shift_instructor", []),
-                    "reservation_assign_instructor": all_instructor_reservations,
-                    "reservation_assign_resource": all_resource_reservations,  # 設備の予約情報
-                    "resources_info": resources_info,  # 設備情報（同時予約可能数を含む）
-                    "fixed_slot_lessons": fixed_slot_lessons_by_date.get(date, []),
-                    "fixed_slot_interval": {
-                        "before_minutes": FIXED_SLOT_BEFORE_INTERVAL_MINUTES,
-                        "after_minutes": FIXED_SLOT_AFTER_INTERVAL_MINUTES
-                    },
-                    "instructor_studio_map": instructor_studio_map,
-                    "shift_slots": shift_slots_by_date.get(date, []),
-                    "program_reservation_count": program_reservation_counts.get(date, 0)  # その日のプログラム予約数
-                }
-            else:
-                result_schedules[date] = None
-        
-        # レスポンスを構築
-        response_data = {
-            "schedules": result_schedules,
-            "date_from": date_from,
-            "date_to": date_to
-        }
-        
-        # キャッシュに保存
-        _choice_schedule_range_cache[cache_key] = response_data
-        _choice_schedule_range_cache_time[cache_key] = now
-        logger.info(f"Cached choice-schedule-range for {cache_key}")
-        
+        response_data = refresh_choice_schedule_range_cache(
+            client, studio_room_id, date_from, date_to, program_id
+        )
         return jsonify(response_data)
     except Exception as e:
         logger.error(f"Failed to get choice schedule range: {e}")

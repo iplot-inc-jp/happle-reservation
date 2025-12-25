@@ -71,6 +71,27 @@ _resources_cache_by_studio: dict = {}  # { studio_id: { resource_id: {...} } }
 _resources_cache_time_by_studio: dict = {}  # { studio_id: datetime }
 RESOURCES_CACHE_TTL_SECONDS = 300  # 5分間キャッシュ（設備情報は頻繁に変わらない）
 
+# ==================== マスタデータキャッシュ ====================
+# 店舗一覧キャッシュ（ほとんど変わらない）
+_studios_cache = None
+_studios_cache_time = None
+STUDIOS_CACHE_TTL_SECONDS = 600  # 10分間キャッシュ
+
+# プログラム一覧キャッシュ（店舗ごと）
+_programs_cache_by_studio: dict = {}  # { studio_id: [programs] }
+_programs_cache_time_by_studio: dict = {}  # { studio_id: datetime }
+PROGRAMS_CACHE_TTL_SECONDS = 300  # 5分間キャッシュ
+
+# スタジオルーム一覧キャッシュ（店舗ごと）
+_studio_rooms_cache_by_studio: dict = {}  # { studio_id: [rooms] }
+_studio_rooms_cache_time_by_studio: dict = {}  # { studio_id: datetime }
+STUDIO_ROOMS_CACHE_TTL_SECONDS = 300  # 5分間キャッシュ
+
+# 自由枠スケジュールキャッシュ（room_id + date ごと）- 短時間キャッシュ
+_choice_schedule_cache: dict = {}  # { "room_id:date": schedule }
+_choice_schedule_cache_time: dict = {}  # { "room_id:date": datetime }
+CHOICE_SCHEDULE_CACHE_TTL_SECONDS = 30  # 30秒間キャッシュ（予約状況は変わりやすい）
+
 
 def get_cached_instructor_studio_map(client: HacomonoClient) -> dict:
     """スタッフのスタジオ紐付け情報をキャッシュ付きで取得
@@ -179,6 +200,125 @@ def get_cached_resources(client: HacomonoClient, studio_id: int = None) -> dict:
         return cached_data
     
     return resources_map
+
+
+def get_cached_studios(client: HacomonoClient) -> list:
+    """店舗一覧をキャッシュ付きで取得（10分間）"""
+    global _studios_cache, _studios_cache_time
+    
+    now = datetime.now()
+    
+    if (_studios_cache is not None and 
+        _studios_cache_time is not None and
+        (now - _studios_cache_time).total_seconds() < STUDIOS_CACHE_TTL_SECONDS):
+        logger.debug("Using cached studios")
+        return _studios_cache
+    
+    try:
+        response = client.get_studios()
+        studios = response.get("data", {}).get("studios", {}).get("list", [])
+        _studios_cache = studios
+        _studios_cache_time = now
+        logger.info(f"Loaded studios cache: {len(studios)} studios")
+        return studios
+    except Exception as e:
+        logger.warning(f"Failed to get studios: {e}")
+        if _studios_cache is not None:
+            return _studios_cache
+        return []
+
+
+def get_cached_programs(client: HacomonoClient, studio_id: int = None) -> list:
+    """プログラム一覧をキャッシュ付きで取得（5分間、店舗ごと）"""
+    global _programs_cache_by_studio, _programs_cache_time_by_studio
+    
+    now = datetime.now()
+    cache_key = studio_id or "all"
+    
+    cached_data = _programs_cache_by_studio.get(cache_key)
+    cached_time = _programs_cache_time_by_studio.get(cache_key)
+    if (cached_data is not None and 
+        cached_time is not None and
+        (now - cached_time).total_seconds() < PROGRAMS_CACHE_TTL_SECONDS):
+        logger.debug(f"Using cached programs for studio {cache_key}")
+        return cached_data
+    
+    try:
+        query = {"is_active": True}
+        if studio_id:
+            query["studio_id"] = studio_id
+        response = client.get_programs(query)
+        programs = response.get("data", {}).get("programs", {}).get("list", [])
+        _programs_cache_by_studio[cache_key] = programs
+        _programs_cache_time_by_studio[cache_key] = now
+        logger.info(f"Loaded programs cache for studio {cache_key}: {len(programs)} programs")
+        return programs
+    except Exception as e:
+        logger.warning(f"Failed to get programs for studio {cache_key}: {e}")
+        if cached_data is not None:
+            return cached_data
+        return []
+
+
+def get_cached_studio_rooms(client: HacomonoClient, studio_id: int = None) -> list:
+    """スタジオルーム一覧をキャッシュ付きで取得（5分間、店舗ごと）"""
+    global _studio_rooms_cache_by_studio, _studio_rooms_cache_time_by_studio
+    
+    now = datetime.now()
+    cache_key = studio_id or "all"
+    
+    cached_data = _studio_rooms_cache_by_studio.get(cache_key)
+    cached_time = _studio_rooms_cache_time_by_studio.get(cache_key)
+    if (cached_data is not None and 
+        cached_time is not None and
+        (now - cached_time).total_seconds() < STUDIO_ROOMS_CACHE_TTL_SECONDS):
+        logger.debug(f"Using cached studio rooms for studio {cache_key}")
+        return cached_data
+    
+    try:
+        query = {}
+        if studio_id:
+            query["studio_id"] = studio_id
+        response = client.get_studio_rooms(query if query else None)
+        rooms = response.get("data", {}).get("studio_rooms", {}).get("list", [])
+        _studio_rooms_cache_by_studio[cache_key] = rooms
+        _studio_rooms_cache_time_by_studio[cache_key] = now
+        logger.info(f"Loaded studio rooms cache for studio {cache_key}: {len(rooms)} rooms")
+        return rooms
+    except Exception as e:
+        logger.warning(f"Failed to get studio rooms for studio {cache_key}: {e}")
+        if cached_data is not None:
+            return cached_data
+        return []
+
+
+def get_cached_choice_schedule(client: HacomonoClient, studio_room_id: int, date: str) -> dict:
+    """自由枠スケジュールをキャッシュ付きで取得（30秒間）"""
+    global _choice_schedule_cache, _choice_schedule_cache_time
+    
+    now = datetime.now()
+    cache_key = f"{studio_room_id}:{date}"
+    
+    cached_data = _choice_schedule_cache.get(cache_key)
+    cached_time = _choice_schedule_cache_time.get(cache_key)
+    if (cached_data is not None and 
+        cached_time is not None and
+        (now - cached_time).total_seconds() < CHOICE_SCHEDULE_CACHE_TTL_SECONDS):
+        logger.debug(f"Using cached choice schedule for {cache_key}")
+        return cached_data
+    
+    try:
+        response = client.get_choice_schedule(studio_room_id, date)
+        schedule = response.get("data", {}).get("schedule", {})
+        _choice_schedule_cache[cache_key] = schedule
+        _choice_schedule_cache_time[cache_key] = now
+        logger.debug(f"Loaded choice schedule cache for {cache_key}")
+        return schedule
+    except Exception as e:
+        logger.warning(f"Failed to get choice schedule for {cache_key}: {e}")
+        if cached_data is not None:
+            return cached_data
+        raise
 
 
 def handle_errors(f):
@@ -985,13 +1125,11 @@ def health_check():
 @app.route("/api/studios", methods=["GET"])
 @handle_errors
 def get_studios():
-    """店舗一覧を取得"""
+    """店舗一覧を取得（10分間キャッシュ）"""
     client = get_hacomono_client()
     
-    query = {"is_active": True}
-    response = client.get_studios(query)
-    
-    studios = response.get("data", {}).get("studios", {}).get("list", [])
+    # キャッシュから取得（10分間有効）
+    studios = get_cached_studios(client)
     
     # 必要な情報のみ抽出
     result = []
@@ -1068,18 +1206,13 @@ def get_instructors():
 @app.route("/api/programs", methods=["GET"])
 @handle_errors
 def get_programs():
-    """プログラム一覧を取得"""
+    """プログラム一覧を取得（5分間キャッシュ）"""
     client = get_hacomono_client()
     
     studio_id = request.args.get("studio_id", type=int)
     
-    query = {"is_active": True}
-    if studio_id:
-        query["studio_id"] = studio_id
-    
-    response = client.get_programs(query)
-    
-    programs = response.get("data", {}).get("programs", {}).get("list", [])
+    # キャッシュから取得（5分間有効、店舗ごと）
+    programs = get_cached_programs(client, studio_id)
     
     # 必要な情報のみ抽出
     result = []
@@ -1180,9 +1313,8 @@ def get_available_instructors():
         return jsonify({"error": "Missing required parameters: studio_room_id, date, start_time"}), 400
     
     try:
-        # choice/scheduleからスタッフ情報を取得
-        schedule_response = client.get_choice_schedule(studio_room_id, date)
-        schedule = schedule_response.get("data", {}).get("schedule", {})
+        # choice/scheduleからスタッフ情報を取得（30秒間キャッシュ）
+        schedule = get_cached_choice_schedule(client, studio_room_id, date)
         
         # 利用可能なスタッフを取得
         shift_instructors = schedule.get("shift_instructor", [])
@@ -2417,9 +2549,8 @@ def create_choice_reservation():
                     selectable_instructor_ids = set(item.get("instructor_id") for item in items if item.get("instructor_id"))
                     logger.info(f"Program {program_id} has selectable instructors (type={detail_type}): {selectable_instructor_ids}")
             
-            # choice/scheduleから空いているスタッフを取得
-            schedule_response = client.get_choice_schedule(studio_room_id, date_str)
-            schedule = schedule_response.get("data", {}).get("schedule", {})
+            # choice/scheduleから空いているスタッフを取得（30秒間キャッシュ）
+            schedule = get_cached_choice_schedule(client, studio_room_id, date_str)
             
             # スタジオIDを取得（スタッフのスタジオ紐付けチェック用）
             studio_room_service = schedule.get("studio_room_service", {})
@@ -2839,10 +2970,10 @@ def get_choice_schedule():
     
     try:
         # 1. 自由枠スケジュールを取得（これは最初に必要 - studio_idを取得するため）
+        # 30秒間キャッシュを使用
         t1 = time.perf_counter()
-        response = client.get_choice_schedule(studio_room_id, date)
-        schedule = response.get("data", {}).get("schedule", {})
-        logger.debug(f"[PERF] get_choice_schedule: {time.perf_counter() - t1:.3f}s")
+        schedule = get_cached_choice_schedule(client, studio_room_id, date)
+        logger.debug(f"[PERF] get_choice_schedule (cached): {time.perf_counter() - t1:.3f}s")
         
         # デバッグ: スケジュールレスポンスの構造を確認（休憩ブロック情報の有無を確認）
         logger.debug(f"Schedule response keys: {list(schedule.keys())}")
@@ -3091,10 +3222,10 @@ def get_choice_schedule_range():
         actual_studio_id = None
         
         def fetch_schedule(date: str):
-            """単一日付のスケジュールを取得"""
+            """単一日付のスケジュールを取得（30秒間キャッシュ）"""
             try:
-                response = client.get_choice_schedule(studio_room_id, date)
-                schedule = response.get("data", {}).get("schedule", {})
+                # キャッシュから取得
+                schedule = get_cached_choice_schedule(client, studio_room_id, date)
                 return date, {
                     "studio_room_service": schedule.get("studio_room_service"),
                     "shift": schedule.get("shift"),
@@ -3405,18 +3536,14 @@ def get_choice_reserve_context():
 @app.route("/api/studio-rooms", methods=["GET"])
 @handle_errors
 def get_studio_rooms():
-    """スタジオルーム一覧を取得"""
+    """スタジオルーム一覧を取得（5分間キャッシュ）"""
     client = get_hacomono_client()
     
     studio_id = request.args.get("studio_id", type=int)
     
-    query = {"is_active": True}
-    if studio_id:
-        query["studio_id"] = studio_id
-    
     try:
-        response = client.get_studio_rooms(query)
-        rooms = response.get("data", {}).get("studio_rooms", {}).get("list", [])
+        # キャッシュから取得（5分間有効、店舗ごと）
+        rooms = get_cached_studio_rooms(client, studio_id)
         
         result = []
         for room in rooms:

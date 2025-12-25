@@ -3,7 +3,7 @@
 import { useEffect, useState, Suspense, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { sendGTMEvent } from '@next/third-parties/google'
-import { getChoiceSchedule, getChoiceScheduleRange, getStudios, getPrograms, getStudioRooms, checkReservability, ChoiceSchedule, Studio, Program, StudioRoom, hasSelectableInstructors, hasSelectableResources, getSelectableInstructorIds } from '@/lib/api'
+import { getChoiceScheduleRange, getStudios, getPrograms, getStudioRooms, checkReservability, ChoiceSchedule, Studio, Program, StudioRoom, hasSelectableInstructors, hasSelectableResources, getSelectableInstructorIds } from '@/lib/api'
 import { format, addDays, startOfDay, subDays, parseISO, isSameDay } from 'date-fns'
 import { ja } from 'date-fns/locale'
 
@@ -113,7 +113,7 @@ function FreeScheduleContent() {
   }, [])
 
   // 2. Handle Studio Selection -> Load Programs & Find Room
-  // 【パフォーマンス最適化】複数の部屋のスケジュールを並列取得、プログラム取得も並列化
+  // 【パフォーマンス最適化】全てのAPIリクエストを並列実行、getChoiceScheduleをgetChoiceScheduleRangeに統合
   const handleStudioSelect = async (studio: Studio, isFromUrl: boolean = false) => {
     setSelectedStudio(studio)
     if (!isFromUrl) {
@@ -124,8 +124,20 @@ function FreeScheduleContent() {
     }
     
     try {
-        // Load Rooms first
-        const roomsData = await getStudioRooms(studio.id)
+        // 現在時刻（日本時間）を取得
+        const now = new Date()
+        const todayStr = format(now, 'yyyy-MM-dd')
+        const weekEndStr = format(addDays(now, 6), 'yyyy-MM-dd')
+        
+        // 【最適化】Rooms と Programs を並列取得
+        const [roomsData, programsData] = await Promise.all([
+          getStudioRooms(studio.id),
+          getPrograms({
+            studioId: studio.id,
+            filterFullyConfigured: true
+          })
+        ])
+        
         // CHOICEタイプの部屋を探す
         const choiceRooms = roomsData.filter(r => r.reservation_type === 'CHOICE')
         const candidateRooms = choiceRooms.length > 0 
@@ -137,36 +149,28 @@ function FreeScheduleContent() {
             return
         }
         
-        // 現在時刻（日本時間）を取得して日付のみで比較
-        const now = new Date()
-        const todayStr = format(now, 'yyyy-MM-dd')
-        
-        // 【最適化】プログラム取得と部屋のスケジュール取得を並列実行
-        const [programsData, roomSchedules] = await Promise.all([
-          // プログラム取得（スタッフと設備の両方が紐づいているプログラムのみ）
-          getPrograms({
-            studioId: studio.id,
-            filterFullyConfigured: true
-          }),
-          // 全ての候補部屋のスケジュールを並列取得
-          Promise.all(
-            candidateRooms.map(async (room) => {
-              try {
-                const scheduleData = await getChoiceSchedule(room.id, todayStr)
-                return { room, scheduleData }
-              } catch (err) {
-                console.error(`Failed to check room ${room.id}:`, err)
-                return { room, scheduleData: null }
-              }
-            })
-          )
-        ])
+        // 【最適化】getChoiceScheduleRange で週間データを取得し、初日のデータで検証
+        // getChoiceSchedule の代わりに使用（1回のAPIで7日分取得）
+        const roomSchedules = await Promise.all(
+          candidateRooms.map(async (room) => {
+            try {
+              // program_id は後で決まるので、ここでは none で取得
+              const scheduleMap = await getChoiceScheduleRange(room.id, todayStr, weekEndStr)
+              const todaySchedule = scheduleMap.get(todayStr)
+              return { room, scheduleData: todaySchedule, scheduleMap }
+            } catch (err) {
+              console.error(`Failed to check room ${room.id}:`, err)
+              return { room, scheduleData: null, scheduleMap: new Map() }
+            }
+          })
+        )
         
         // 適用期間内の予約カテゴリを探す
         let validRoom: StudioRoom | null = null
         let validRoomService: ChoiceSchedule['studio_room_service'] | null = null
+        let validScheduleMap: Map<string, ChoiceSchedule | null> = new Map()
         
-        for (const { room, scheduleData } of roomSchedules) {
+        for (const { room, scheduleData, scheduleMap } of roomSchedules) {
           if (!scheduleData) continue
           const roomService = scheduleData.studio_room_service
           
@@ -183,6 +187,7 @@ function FreeScheduleContent() {
           if (isWithinPeriod) {
             validRoom = room
             validRoomService = roomService
+            validScheduleMap = scheduleMap
             break
           }
         }
@@ -210,6 +215,8 @@ function FreeScheduleContent() {
           const initialProgram = filteredPrograms.find(p => p.id === parseInt(initialProgramId))
           if (initialProgram) {
             setSelectedProgram(initialProgram)
+            // 既に取得したスケジュールマップを設定（再取得不要）
+            // ただしprogram_idが違うので、useEffectで再取得される
           }
         }
 

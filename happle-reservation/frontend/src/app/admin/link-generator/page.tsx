@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useState, Suspense } from 'react'
-import { getPrograms, getStudios, getStudioRooms, getChoiceSchedule, Program, Studio, StudioRoom, ChoiceSchedule } from '@/lib/api'
+import { getPrograms, getStudios, getStudioRooms, getChoiceScheduleRange, Program, Studio, StudioRoom, ChoiceSchedule } from '@/lib/api'
+import { addDays } from 'date-fns'
 import { format } from 'date-fns'
 
 function LinkGeneratorContent() {
@@ -102,31 +103,42 @@ function LinkGeneratorContent() {
       }
       
       // 現在日付
-      const todayStr = format(new Date(), 'yyyy-MM-dd')
+      const now = new Date()
+      const todayStr = format(now, 'yyyy-MM-dd')
+      const weekEndStr = format(addDays(now, 6), 'yyyy-MM-dd')
       
-      // 適用期間内の予約カテゴリを探す
+      // 適用期間内の予約カテゴリを探す（getChoiceScheduleRangeを使用して最適化）
       let validRoomService: ChoiceSchedule['studio_room_service'] | null = null
       
-      for (const room of candidateRooms) {
-        try {
-          const scheduleData = await getChoiceSchedule(room.id, todayStr)
-          const roomService = scheduleData?.studio_room_service
-          
-          if (!roomService) continue
-          
-          // 適用期間のチェック
-          let isWithinPeriod = true
-          if (roomService.start_date && roomService.end_date) {
-            isWithinPeriod = todayStr >= roomService.start_date && todayStr <= roomService.end_date
+      // 並列で全ての部屋のスケジュールを取得
+      const roomSchedules = await Promise.all(
+        candidateRooms.map(async (room) => {
+          try {
+            const scheduleMap = await getChoiceScheduleRange(room.id, todayStr, weekEndStr)
+            const todaySchedule = scheduleMap.get(todayStr)
+            return { room, scheduleData: todaySchedule }
+          } catch (err) {
+            console.error(`Failed to check room ${room.id}:`, err)
+            return { room, scheduleData: null }
           }
-          
-          if (isWithinPeriod) {
-            validRoomService = roomService
-            break
-          }
-        } catch (err) {
-          console.error(`Failed to check room ${room.id}:`, err)
-          continue
+        })
+      )
+      
+      for (const { scheduleData } of roomSchedules) {
+        if (!scheduleData) continue
+        const roomService = scheduleData.studio_room_service
+        
+        if (!roomService) continue
+        
+        // 適用期間のチェック
+        let isWithinPeriod = true
+        if (roomService.start_date && roomService.end_date) {
+          isWithinPeriod = todayStr >= roomService.start_date && todayStr <= roomService.end_date
+        }
+        
+        if (isWithinPeriod) {
+          validRoomService = roomService
+          break
         }
       }
       
